@@ -1,0 +1,60 @@
+{
+    "version": 3,
+    "configurePresets": [{
+        "name": "MacOS-Release",
+        "hidden": false,
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/build/${presetName}",
+        "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/bin",
+            "CMAKE_PREFIX_PATH": "$env{HOME}/Qt/6.11.0/macos"
+        }
+    },{
+        "name": "MacOS-Debug",
+        "inherits": "MacOS-Release",
+        "hidden": false,
+        "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Debug"
+        }
+    },{
+        "name": "Win64-Release",
+        "hidden": false,
+        "generator": "Visual Studio 17 2022",
+        "binaryDir": "${sourceDir}/build/${presetName}",
+        "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/bin",
+            "CMAKE_PREFIX_PATH": "$env{Qt6_DIR}/lib/cmake",
+            "FFMPEG_DIR": "$env{FFMPEG_DIR}"
+        }
+    },{
+        "name": "Win64-Debug",
+        "inherits": "Win64-Release",
+        "hidden": false,
+        "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Debug"
+        }
+    }],
+    "buildPresets": [{
+        "name": "MacOS-Release",
+        "hidden": false,
+        "configurePreset": "MacOS-Release",
+        "configuration": "Release"
+    },{
+        "name": "MacOS-Debug",
+        "hidden": false,
+        "configurePreset": "MacOS-Debug",
+        "configuration": "Debug"
+    },{
+        "name": "Win64-Release",
+        "hidden": false,
+        "configurePreset": "Win64-Release",
+        "configuration": "Release"
+    },{
+        "name": "Win64-Debug",
+        "hidden": false,
+        "configurePreset": "Win64-Debug",
+        "configuration": "Debug"
+    }]
+}
