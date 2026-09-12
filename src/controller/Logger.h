@@ -45,7 +45,7 @@ public:
     LogWorker error(const std::source_location& location = std::source_location::current());
     LogWorker fatal(const std::source_location& location = std::source_location::current());
 
-    FunctionTracer trace(const std::source_location& location = std::source_location::current());
+    std::unique_ptr<FunctionTracer> trace(const std::source_location& location = std::source_location::current());
 
 private:
     LogCallback m_logCallback;

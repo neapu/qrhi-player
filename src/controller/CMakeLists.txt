@@ -6,6 +6,9 @@ add_library(${LIB_NAME} SHARED
     Decoder.cpp
     Packet.cpp
     Logger.cpp
+    Demuxer.cpp
+    DemuxerWorker.cpp
+    DecodeWorker.cpp
 )
 
 target_compile_definitions(${LIB_NAME} PRIVATE CONTROLLER_LIBRARY)

@@ -62,9 +62,9 @@ LogWorker Logger::fatal(const std::source_location& location)
     return LogWorker(LogLevel::Fatal, m_logCallback, location);
 }
 
-FunctionTracer Logger::trace(const std::source_location& location)
+std::unique_ptr<FunctionTracer> Logger::trace(const std::source_location& location)
 {
-    return FunctionTracer(m_logCallback, location);
+    return std::make_unique<FunctionTracer>(m_logCallback, location);
 }
 
 } // namespace controller

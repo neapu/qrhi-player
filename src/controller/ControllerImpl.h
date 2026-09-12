@@ -18,7 +18,7 @@ public:
     virtual bool isPaused() const override;
 private:
     Params m_params;
-    std::unique_ptr<Logger> m_logger{};
+    std::shared_ptr<Logger> m_logger{};
 };
 
 } // namespace controller

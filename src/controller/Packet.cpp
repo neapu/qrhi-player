@@ -14,9 +14,19 @@ Packet::Packet(int serial, PacketType type, fh::PacketPtr&& packet)
 {
 }
 
+void Packet::setType(PacketType type)
+{
+    m_type = type;
+}
+
 Packet::PacketType Packet::type() const
 {
     return m_type;
+}
+
+void Packet::setSerial(int serial)
+{
+    m_serial = serial;
 }
 
 int Packet::serial() const

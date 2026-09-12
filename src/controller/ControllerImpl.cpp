@@ -26,9 +26,9 @@ Controller::~Controller()
 bool Controller::initialize()
 {
     if (m_params.logCallback) {
-        m_logger = std::make_unique<Logger>(m_params.logCallback);
+        m_logger = std::make_shared<Logger>(m_params.logCallback);
     } else {
-        m_logger = std::make_unique<Logger>([](LogLevel level, const std::string& fileName, int line, const std::string& message) {
+        m_logger = std::make_shared<Logger>([](LogLevel level, const std::string& fileName, int line, const std::string& message) {
             std::string logLevel{"Debug"};
             switch (level) {
                 case LogLevel::Debug:

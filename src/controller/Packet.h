@@ -11,7 +11,9 @@ public:
 
     static std::unique_ptr<Packet> create(int serial, PacketType type);
 
+    void setType(PacketType type);
     PacketType type() const;
+    void setSerial(int serial);
     int serial() const;
 
     const AVPacket* avPacket() const;
