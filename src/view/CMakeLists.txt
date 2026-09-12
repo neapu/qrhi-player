@@ -1,4 +1,4 @@
-set(EXE_NAME "qrhi_video_player")
+set(EXE_NAME "qrhi_player")
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Widgets)
 
@@ -6,11 +6,21 @@ qt_standard_project_setup()
 
 qt_add_executable(${EXE_NAME}
     main.cpp
+    LogManager.cpp
+    MainWindow.cpp
 )
 
-target_link_libraries(${EXE_NAME} PRIVATE Qt6::Core Qt6::Widgets)
+target_link_libraries(${EXE_NAME} PRIVATE Qt6::Core Qt6::Widgets Controller)
 
 include(FetchContent)
+
+# spdlog 默认用窄字符 fopen 打开日志文件，无法处理含非 ASCII 字符（如中文用户名）的
+# %APPDATA% 路径。必须在 FetchContent_MakeAvailable 之前定义，
+# 保证 spdlog 库本身与本项目使用一致的 filename_t，否则会因 ODR 冲突崩溃
+if (WIN32)
+    add_compile_definitions(SPDLOG_WCHAR_FILENAMES)
+endif()
+
 FetchContent_Declare(
     spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
@@ -21,12 +31,11 @@ FetchContent_MakeAvailable(spdlog)
 target_link_libraries(${EXE_NAME} PRIVATE spdlog::spdlog)
 
 if (WIN32)
-    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-        # 设置为控制台应用程序，方便调试
-        set_target_properties(${EXE_NAME} PROPERTIES
-            WIN32_EXECUTABLE FALSE
-        )
-    endif()
+    # Debug 配置为控制台应用程序，方便调试；Release 保持 GUI 程序。
+    # 用生成器表达式而非 CMAKE_BUILD_TYPE 判断，兼容多配置生成器（VS / Ninja Multi-Config）
+    set_target_properties(${EXE_NAME} PROPERTIES
+        WIN32_EXECUTABLE $<CONFIG:Debug>
+    )
 
     # 配置Windows平台下，自动拷贝Qt依赖库到bin目录
     find_program(WINDEPLOYQT_EXECUTABLE NAMES windeployqt HINTS "${Qt6_DIR}/../../../bin")
