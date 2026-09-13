@@ -1,6 +1,6 @@
 #pragma once
 #include <memory>
-#include <optional>
+#include <expected>
 #include "ffmpeg_helper/CodecContext.h"
 
 extern "C" {
@@ -9,24 +9,28 @@ extern "C" {
 
 #include "Packet.h"
 #include "FrameImpl.h"
+#include "Logger.h"
 
 namespace controller {
 class Decoder {
 public:
-    static std::unique_ptr<Decoder> create(const AVStream* stream);
+    static std::unique_ptr<Decoder> create(const AVStream* stream, std::shared_ptr<Logger> logger);
 
     virtual ~Decoder() = default;
 
     virtual bool sendPacket(controller::PacketPtr&& packet);
-    virtual std::optional<std::unique_ptr<Frame>> receiveFrame();
+    virtual std::expected<std::unique_ptr<Frame>, int> receiveFrame(int serial);
+
+    virtual void flush();
 
 protected:
     Decoder() = default;
-    bool initialize(const AVStream* stream);
+    bool initialize(const AVStream* stream, std::shared_ptr<Logger> logger);
     bool createContext(const AVStream* stream);
     bool openCodec(const AVStream* stream);
 
 protected:
+    std::shared_ptr<Logger> m_logger{nullptr};
     fh::CodecContextPtr m_codecCtx{nullptr};
 };
 using DecoderPtr = std::shared_ptr<Decoder>;

@@ -159,6 +159,23 @@ int Frame::samples() const
     return m_frame ? m_frame->nb_samples : 0;
 }
 
+int64_t Frame::pts() const
+{
+    return m_frame ? m_frame->pts : 0;
+}
+
+void Frame::setPts(int64_t pts)
+{
+    if (m_frame) {
+        m_frame->pts = pts;
+    }
+}
+
+AVRational Frame::timebase() const
+{
+    return m_frame ? m_frame->time_base : AVRational{0, 1};
+}
+
 void* Frame::rawFrame()
 {
     return m_frame ? m_frame.get() : nullptr;

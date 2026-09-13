@@ -51,3 +51,31 @@ private:
     LogCallback m_logCallback;
 };
 } // namespace controller
+
+#define LOGE(x) \
+    if (m_logger) { \
+        m_logger->error() << x; \
+    }
+
+#define LOGW(x) \
+    if (m_logger) { \
+        m_logger->warning() << x; \
+    }
+
+#define LOGI(x) \
+    if (m_logger) { \
+        m_logger->info() << x; \
+    }
+
+#define LOGD(x) \
+    if (m_logger) { \
+        m_logger->debug() << x; \
+    }
+
+#define LOGF(x) \
+    if (m_logger) { \
+        m_logger->fatal() << x; \
+    }
+
+#define FUNC_TRACE() \
+    std::unique_ptr<controller::FunctionTracer> funcTracer = m_logger ? m_logger->trace() : nullptr;

@@ -12,6 +12,7 @@ public:
     bool isValid() const { return m_frame != nullptr; }
 
     FrameType type() const override { return m_type; }
+    void setType(FrameType type) { m_type = type; }
     int serial() const override { return m_serial; }
 
     int width() const override;
@@ -33,6 +34,11 @@ public:
     int sampleRate() const override;
     int channels() const override;
     int samples() const override;
+
+    int64_t pts() const;
+    void setPts(int64_t pts);
+
+    AVRational timebase() const;
 
     void* rawFrame() override;
     const void* rawFrame() const override;

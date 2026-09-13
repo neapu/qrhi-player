@@ -18,9 +18,7 @@ Controller::Controller(const Params& params) : m_params(params)
 
 Controller::~Controller()
 {
-    if (m_logger) {
-        auto tracer = m_logger->trace();
-    }
+    FUNC_TRACE();
 }
 
 bool Controller::initialize()
@@ -66,7 +64,7 @@ bool Controller::initialize()
     
     auto tracer = m_logger->trace();
 
-    m_logger->info() << "Opening file: " << m_params.url;
+    LOGI("Opening file: " << m_params.url);
 
     return true;
 }

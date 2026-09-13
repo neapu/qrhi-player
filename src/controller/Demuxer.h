@@ -14,7 +14,7 @@ public:
     const AVStream* stream(int index) const;
 
     controller::PacketPtr readPacket(int serial);
-    void seek(int streamIndex, int64_t pts);
+    bool seek(int streamIndex, int64_t pts);
     
 private:
     Demuxer() = default;

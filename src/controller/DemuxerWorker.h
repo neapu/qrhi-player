@@ -15,8 +15,12 @@ public:
     };
     static std::unique_ptr<DemuxerWorker> create(const Params& params);
 
+    ~DemuxerWorker();
+
     int serial() const { return m_serial.load(); }
     void seek(int streamIndex, int64_t pts);
+
+    void stop();
 
 private:
     DemuxerWorker() = default;
