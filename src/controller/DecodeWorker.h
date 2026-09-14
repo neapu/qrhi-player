@@ -21,6 +21,9 @@ public:
         bool canDropFrames{false};
         // 时钟策略：true=严格按时钟放行(视频)；false=时钟跳变超过阈值才限制(音频)
         bool controlClock{true};
+        // 中断查询：返回true表示当前包已因pending seek过时，应丢弃。
+        // 同时作为包队列满时阻塞等待的唤醒条件，避免解封装线程被旧数据卡住延迟消费seek请求
+        std::function<bool()> interrupt;
     };
     static std::unique_ptr<DecodeWorker> create(const Params& params);
 
@@ -28,6 +31,10 @@ public:
 
     void sendPacket(PacketPtr&& packet);
     FramePtr receiveFrame(int64_t playTimeUs);
+
+    // seek投递后调用：唤醒可能因包队列满而阻塞在sendPacket的解封装线程，
+    // 其等待谓词会重查interrupt回调并丢弃在途旧包
+    void interrupt();
 
     void stop();
 
@@ -51,6 +58,7 @@ protected:
     std::shared_ptr<Logger> m_logger{nullptr};
     const AVStream* m_stream{nullptr};
     std::vector<std::shared_ptr<FrameProcessor>> m_frameProcessors;
+    std::function<bool()> m_interrupt;
 
     std::deque<PacketPtr> m_packetQueue;
     std::mutex m_packetQueueMutex;

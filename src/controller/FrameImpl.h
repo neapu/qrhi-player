@@ -35,7 +35,7 @@ public:
     int channels() const override;
     int samples() const override;
 
-    int64_t pts() const;
+    int64_t pts() const override;
     void setPts(int64_t pts);
 
     AVRational timebase() const;

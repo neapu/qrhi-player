@@ -34,6 +34,7 @@ bool DecodeWorker::initialize(const Params& params)
     m_maxPacketQueueDepth = params.maxPacketQueueDepth;
     m_canDropFrames = params.canDropFrames;
     m_controlClock = params.controlClock;
+    m_interrupt = params.interrupt;
 
     auto tracer = m_logger->trace();
 
@@ -51,10 +52,20 @@ bool DecodeWorker::initialize(const Params& params)
     return true;
 }
 
+void DecodeWorker::interrupt()
+{
+    m_packetQueueCV.notify_all();
+}
+
 void DecodeWorker::sendPacket(PacketPtr&& packet)
 {
     if (!packet) { // 正常流程解封装线程不会传入nullptr
         LOGE("Received a null packet, this should not happen.");
+        return;
+    }
+    if (m_interrupt && m_interrupt()) {
+        // seek已投递未消费，此包读取自旧位置注定过时，直接丢弃；
+        // 丢弃使sendPacket不再阻塞，解封装线程能尽快回到循环顶部消费seek请求
         return;
     }
     auto serial = packet->serial();
@@ -64,6 +75,12 @@ void DecodeWorker::sendPacket(PacketPtr&& packet)
             std::lock_guard<std::mutex> lock(m_packetQueueMutex);
             m_packetQueue.clear();
         }
+        {
+            // 唤醒可能因帧队列满而阻塞在本worker帧入队处的解码线程：
+            // serial已变化，其等待谓词判定手中旧帧作废并丢弃
+            std::lock_guard<std::mutex> lock(m_frameQueueMutex);
+            m_frameQueueCV.notify_all();
+        }
         m_serial.store(serial);
     }
 
@@ -71,11 +88,13 @@ void DecodeWorker::sendPacket(PacketPtr&& packet)
     if (m_packetQueue.size() >= m_maxPacketQueueDepth) {
         // 包队列满时阻塞等待水位下降。
         // 视频消费速度不足的压力由receiveFrame出队侧按主时钟丢帧消化，这里不丢帧：
-        // 包队列压力无法区分"渲染落后"和"解码暂时慢"，在这里丢会误丢不迟到的帧
+        // 包队列压力无法区分"渲染落后"和"解码暂时慢"，在这里丢会误丢不迟到的帧。
+        // interrupt条件保证pending seek能打断阻塞(见Params::interrupt)
         m_packetQueueCV.wait(lock, [this]() {
-            return m_packetQueue.size() < m_maxPacketQueueDepth || m_exitFlag;
+            return m_packetQueue.size() < m_maxPacketQueueDepth || m_exitFlag
+                || (m_interrupt && m_interrupt());
         });
-        if (m_exitFlag) {
+        if (m_exitFlag || (m_interrupt && m_interrupt())) {
             return;
         }
     }
@@ -195,9 +214,15 @@ void DecodeWorker::workerFunc()
         auto frames = decodePacket(std::move(packet));
         for (auto& f : frames) {
             std::unique_lock<std::mutex> lock(m_frameQueueMutex);
-            m_frameQueueCV.wait(lock, [this]() {
-                return m_frameQueue.size() < m_maxFrameQueueDepth || m_exitFlag;
+            // serial变化(连续seek中又被更新一级)也作为唤醒条件：
+            // 手中旧帧已作废，丢弃并回到取包路径，由下一包触发完整flush
+            m_frameQueueCV.wait(lock, [this, &serial]() {
+                return m_frameQueue.size() < m_maxFrameQueueDepth || m_exitFlag
+                    || serial != m_serial.load();
             });
+            if (m_exitFlag || serial != m_serial.load()) {
+                break;
+            }
             m_frameQueue.push_back(std::move(f));
             m_frameQueueCV.notify_all();
         }

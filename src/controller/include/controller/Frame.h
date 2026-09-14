@@ -23,6 +23,12 @@ public:
      */
     virtual int serial() const = 0;
 
+    /**
+     * @brief 获取帧的显示时间戳，单位为微秒(us)
+     * @return int64_t 显示时间戳，无效时为AV_NOPTS_VALUE(-2^63)
+     */
+    virtual int64_t pts() const = 0;
+
     // ============= 视频相关 =============
     enum class PixelFormat {
         None,

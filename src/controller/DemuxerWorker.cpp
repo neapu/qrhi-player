@@ -46,6 +46,9 @@ void DemuxerWorker::seek(int streamIndex, int64_t pts)
     {
         std::lock_guard<std::mutex> lock(m_seekMutex);
         m_seekRequest = SeekRequest{streamIndex, pts};
+        // 与m_seekRequest同时持锁修改：m_seekPending是解码线程阻塞谓词的一部分，
+        // 投递后置位，保证解码线程在进入等待前可见
+        m_seekPending.store(true);
     }
     m_seekCV.notify_all();
 }
@@ -59,6 +62,7 @@ bool DemuxerWorker::initialize(const Params& params)
     auto tracer = m_logger->trace();
 
     m_onPacketRead = params.onPacketRead;
+    m_onSeekSucceeded = params.onSeekSucceeded;
     m_demuxer = Demuxer::create(params.url, params.logger);
     if (!m_demuxer) {
         LOGE("Failed to create Demuxer");
@@ -81,11 +85,16 @@ void DemuxerWorker::workerFunc()
             std::lock_guard<std::mutex> lock(m_seekMutex);
             request = m_seekRequest;
             m_seekRequest = {};
+            m_seekPending.store(false);
         }
         if (request.pts != AV_NOPTS_VALUE) {
             if (m_demuxer->seek(request.streamIndex, request.pts)) {
-                m_serial.fetch_add(1);
+                int newSerial = static_cast<int>(m_serial.fetch_add(1)) + 1;
                 eof = false; // 从EOF恢复读取
+                if (m_onSeekSucceeded) {
+                    // 目标取自本次消费的请求：连续seek时每个回调锚定各自的目标，无共享读
+                    m_onSeekSucceeded(newSerial, request.pts);
+                }
             } else {
                 // seek失败保持eof状态，位置未变，继续等待下一个请求
                 LOGE("Failed to seek");

@@ -30,15 +30,15 @@ public:
     virtual ~IController() = default;
 
     /**
-     * @brief 获取下一帧视频帧
+     * @brief 获取下一帧视频帧。消费性操作：会推进内部队列与丢帧状态
      * @return FramePtr 下一帧视频帧
      */
-    virtual FramePtr nextVideoFrame() const = 0;
+    virtual FramePtr nextVideoFrame() = 0;
     /**
-     * @brief 获取下一帧音频帧
+     * @brief 获取下一帧音频帧。消费性操作：会推进内部队列，seek后还会按时钟重锚
      * @return FramePtr 下一帧音频帧
      */
-    virtual FramePtr nextAudioFrame() const = 0;
+    virtual FramePtr nextAudioFrame() = 0;
 
     /**
      * @brief 设置正在播放的音频的时间点，由音频渲染侧周期性调用，用于校准时钟

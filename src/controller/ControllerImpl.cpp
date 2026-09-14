@@ -1,5 +1,6 @@
 #include "ControllerImpl.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <print>
 #include <chrono>
@@ -110,6 +111,9 @@ bool Controller::initialize()
     demuxerParams.onPacketRead = [this](controller::PacketPtr&& packet) {
         onPacketRead(std::move(packet));
     };
+    demuxerParams.onSeekSucceeded = [this](int serial, int64_t targetUs) {
+        onSeekSucceeded(serial, targetUs);
+    };
     m_demuxerWorker = DemuxerWorker::create(demuxerParams);
     if (!m_demuxerWorker) {
         LOGE("Failed to create DemuxerWorker");
@@ -135,6 +139,10 @@ bool Controller::initialize()
             videoDecodeParams.maxPacketQueueDepth = static_cast<size_t>(TARGET_VIDEO_QUEUE_DURATION * fps);
             // 视频允许丢帧：出队侧按主时钟丢弃被覆盖的到期帧
             videoDecodeParams.canDropFrames = true;
+            // pending seek时丢弃在途旧包并打断包队列满的阻塞，保证解封装线程及时消费seek请求
+            videoDecodeParams.interrupt = [this]() {
+                return m_demuxerWorker && m_demuxerWorker->seekPending();
+            };
 
             m_videoWorker = DecodeWorker::create(videoDecodeParams);
             if (!m_videoWorker) {
@@ -160,6 +168,9 @@ bool Controller::initialize()
                 static_cast<size_t>(TARGET_AUDIO_QUEUE_DURATION * sampleRate / frameSize), 16);
             audioDecodeParams.canDropFrames = false; // 音频一般不丢帧
             audioDecodeParams.controlClock = false; // 音频不做严格时钟门控，按阈值放行
+            audioDecodeParams.interrupt = [this]() {
+                return m_demuxerWorker && m_demuxerWorker->seekPending();
+            };
 
             m_audioWorker = DecodeWorker::create(audioDecodeParams);
             if (!m_audioWorker) {
@@ -179,7 +190,7 @@ bool Controller::initialize()
     return true;
 }
 
-FramePtr Controller::nextVideoFrame() const
+FramePtr Controller::nextVideoFrame()
 {
     if (!m_videoWorker) {
         return nullptr;
@@ -193,7 +204,7 @@ FramePtr Controller::nextVideoFrame() const
     return m_videoWorker->receiveFrame(clockUsLocked());
 }
 
-FramePtr Controller::nextAudioFrame() const
+FramePtr Controller::nextAudioFrame()
 {
     if (!m_audioWorker) {
         return nullptr;
@@ -204,12 +215,32 @@ FramePtr Controller::nextAudioFrame() const
         return nullptr;
     }
 
-    return m_audioWorker->receiveFrame(clockUsLocked());
+    auto frame = m_audioWorker->receiveFrame(clockUsLocked());
+    if (frame && frame->serial() != m_clock.servedAudioSerial) {
+        m_clock.servedAudioSerial = frame->serial();
+        if (frame->type() == IFrame::FrameType::Normal && frame->pts() != AV_NOPTS_VALUE) {
+            // seek后首个新段音频帧：按实际落点重锚时钟，
+            // 吸收AVSEEK_FLAG_BACKWARD落在关键帧导致的回退偏差。
+            // 注意：音频回校抑制路径需音频渲染侧调用audioRenderTime才能验证，
+            // 当前view层尚无音频回调，此逻辑留待音频侧接入后联调
+            reanchorLocked(frame->pts(), 1.0);
+        }
+    }
+    return frame;
 }
 
 void Controller::audioRenderTime(int64_t renderTimeUs)
 {
     std::lock_guard<std::mutex> lock(m_clock.mutex);
+    if (m_clock.suppressAudioSync) {
+        // seek过渡期：音频设备缓冲仍在播旧段，其上报会把时钟snap回旧位置；
+        // 忽略直到上报位置与时钟偏差落入正常校准范围(新段已实际发声)
+        if (std::abs(renderTimeUs - clockUsLocked()) >= SYNC_SNAP_US) {
+            return;
+        }
+        m_clock.suppressAudioSync = false;
+    }
+
     if (m_clock.paused) {
         m_clock.pausedMediaUs = renderTimeUs;
         return;
@@ -238,6 +269,30 @@ double Controller::duration() const
 
 void Controller::seek(double timepoint)
 {
+    if (!m_demuxerWorker) {
+        return;
+    }
+    // clamp到合法区间；clamp到duration处会很快读到EOF，属预期行为
+    const double dur = duration();
+    if (timepoint < 0) {
+        timepoint = 0;
+    } else if (dur > 0 && timepoint > dur) {
+        timepoint = dur;
+    }
+    const int64_t targetUs = static_cast<int64_t>(std::llround(timepoint * AV_TIME_BASE));
+
+    LOGI("Seeking to " << timepoint << "s");
+
+    // 仅投递请求，av_seek_frame与时钟重锚都在解封装线程成功后触发(onSeekSucceeded)，
+    // 不阻塞UI线程；seek失败时serial不递增、回调不触发，时钟与播放无缝保持原状
+    m_demuxerWorker->seek(-1, targetUs); // -1=容器默认流，pts为AV_TIME_BASE单位
+    // 唤醒可能因包队列满阻塞在sendPacket的解封装线程，使其尽快回到循环顶部消费seek请求
+    if (m_videoWorker) {
+        m_videoWorker->interrupt();
+    }
+    if (m_audioWorker) {
+        m_audioWorker->interrupt();
+    }
 }
 
 void Controller::pauseOrResume()
@@ -265,6 +320,19 @@ void Controller::onPacketRead(controller::PacketPtr&& packet)
     } else if (m_audioWorker && m_audioWorker->streamIndex() == packet->streamIndex()) {
         m_audioWorker->sendPacket(std::move(packet));
     }
+}
+
+void Controller::onSeekSucceeded(int serial, int64_t targetUs)
+{
+    // 解封装线程上回调，av_seek_frame已成功、serial已递增
+    std::lock_guard<std::mutex> lock(m_clock.mutex);
+    m_clock.suppressAudioSync = (m_audioWorker != nullptr);
+    if (m_clock.paused) {
+        m_clock.pausedMediaUs = targetUs;
+    } else {
+        reanchorLocked(targetUs, 1.0);
+    }
+    LOGI("Seek succeeded, serial=" << serial << " targetUs=" << targetUs);
 }
 
 int64_t Controller::clockUsLocked() const
