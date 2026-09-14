@@ -41,6 +41,13 @@ public:
     virtual FramePtr nextAudioFrame() const = 0;
 
     /**
+     * @brief 设置正在播放的音频的时间点，由音频渲染侧周期性调用，用于校准时钟
+     * @param renderTimeUs 正在播放的音频的时间点，单位为微秒
+     * @note 内部按偏差大小分级校准：小偏差忽略，中等偏差以微调速率平滑收敛，大偏差直接对齐
+     */
+    virtual void audioRenderTime(int64_t renderTimeUs) = 0;
+
+    /**
      * @brief 获取媒体的总时长
      * @return double 媒体的总时长，单位为秒
      */

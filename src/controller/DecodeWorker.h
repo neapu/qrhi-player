@@ -17,7 +17,10 @@ public:
         std::shared_ptr<Logger> logger{nullptr};
         std::vector<std::shared_ptr<FrameProcessor>> frameProcessors;
         size_t maxPacketQueueDepth{100};
+        // 允许丢帧(视频)：出队侧按主时钟丢弃被新帧覆盖的到期帧
         bool canDropFrames{false};
+        // 时钟策略：true=严格按时钟放行(视频)；false=时钟跳变超过阈值才限制(音频)
+        bool controlClock{true};
     };
     static std::unique_ptr<DecodeWorker> create(const Params& params);
 
@@ -29,6 +32,9 @@ public:
     void stop();
 
     int streamIndex() const;
+
+    // 消费端累计丢弃的帧数，用于统计/调试
+    uint64_t droppedFrames() const { return m_droppedFrames.load(std::memory_order_relaxed); }
 
 protected:
     DecodeWorker();
@@ -63,10 +69,12 @@ protected:
 
     std::atomic_int m_serial{0};
 
-    // 丢帧策略
+    // 丢帧策略(仅视频)：出队侧按主时钟丢弃被覆盖的到期帧，丢弃量由实际迟到程度决定
     bool m_canDropFrames{false};
-    // 时钟策略
+    // 时钟策略：true=严格按时钟放行(视频)，false=时钟跳变超过阈值才限制(音频)
     bool m_controlClock{true};
+    // 消费端累计丢帧数，用于统计/调试
+    std::atomic_uint64_t m_droppedFrames{0};
 };
 
 } // namespace controller

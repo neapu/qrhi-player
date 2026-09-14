@@ -31,6 +31,9 @@ bool DecodeWorker::initialize(const Params& params)
     m_logger = params.logger;
     m_stream = params.stream;
     m_frameProcessors = params.frameProcessors;
+    m_maxPacketQueueDepth = params.maxPacketQueueDepth;
+    m_canDropFrames = params.canDropFrames;
+    m_controlClock = params.controlClock;
 
     auto tracer = m_logger->trace();
 
@@ -66,15 +69,9 @@ void DecodeWorker::sendPacket(PacketPtr&& packet)
 
     std::unique_lock<std::mutex> lock(m_packetQueueMutex);
     if (m_packetQueue.size() >= m_maxPacketQueueDepth) {
-        // 如果允许丢帧，压力传导到帧队列，丢且最早的帧
-        if (m_canDropFrames) {
-            std::lock_guard<std::mutex> frameLock(m_frameQueueMutex);
-            if (!m_frameQueue.empty()) {
-                m_frameQueue.pop_front();
-                m_frameQueueCV.notify_one();
-            }
-        }
-        // 等待水位下降
+        // 包队列满时阻塞等待水位下降。
+        // 视频消费速度不足的压力由receiveFrame出队侧按主时钟丢帧消化，这里不丢帧：
+        // 包队列压力无法区分"渲染落后"和"解码暂时慢"，在这里丢会误丢不迟到的帧
         m_packetQueueCV.wait(lock, [this]() {
             return m_packetQueue.size() < m_maxPacketQueueDepth || m_exitFlag;
         });
@@ -90,6 +87,28 @@ FramePtr DecodeWorker::receiveFrame(int64_t playTimeUs)
 {
     // 取帧不阻塞，如果队列为空则返回nullptr
     std::lock_guard<std::mutex> lock(m_frameQueueMutex);
+
+    // 丢帧策略：出队侧按主时钟丢弃。
+    // 若队列中的下一帧也已到期(pts <= playTimeUs)，说明队头帧已被更新的帧覆盖，
+    // 必然不会被显示，直接丢弃。每次调用丢弃0~N帧，数量由实际迟到程度决定，
+    // 与帧率/渲染速度的比例无关；同时保证返回的是"已到期帧中最新的"一帧
+    if (m_canDropFrames) {
+        size_t dropCount = 0;
+        while (m_frameQueue.size() >= 2) {
+            const auto& next = m_frameQueue[1];
+            // End等标记帧不参与丢帧判断，避免误丢结尾最后一帧正常帧
+            if (next->type() != IFrame::FrameType::Normal || next->pts() > playTimeUs) {
+                break;
+            }
+            m_frameQueue.pop_front();
+            ++dropCount;
+        }
+        if (dropCount > 0) {
+            m_droppedFrames.fetch_add(dropCount, std::memory_order_relaxed);
+            m_frameQueueCV.notify_one();
+        }
+    }
+
     if (m_frameQueue.empty()) {
         return nullptr;
     }
@@ -256,6 +275,7 @@ std::unique_ptr<Frame> DecodeWorker::postProcessFrame(std::unique_ptr<Frame>&& f
     if (frame->pts() != AV_NOPTS_VALUE && timebase.num != 0) {
         int64_t ptsUs = av_rescale_q(frame->pts(), timebase, AVRational{1, 1000000});
         frame->setPts(ptsUs);
+        frame->setTimebase(AVRational{1, 1000000});
     }
     return std::move(frame);
 }

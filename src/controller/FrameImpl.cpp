@@ -176,6 +176,13 @@ AVRational Frame::timebase() const
     return m_frame ? m_frame->time_base : AVRational{0, 1};
 }
 
+void Frame::setTimebase(AVRational timebase)
+{
+    if (m_frame) {
+        m_frame->time_base = timebase;
+    }
+}
+
 void* Frame::rawFrame()
 {
     return m_frame ? m_frame.get() : nullptr;

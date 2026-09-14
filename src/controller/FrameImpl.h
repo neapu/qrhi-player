@@ -39,6 +39,7 @@ public:
     void setPts(int64_t pts);
 
     AVRational timebase() const;
+    void setTimebase(AVRational timebase);
 
     void* rawFrame() override;
     const void* rawFrame() const override;
