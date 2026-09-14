@@ -95,6 +95,21 @@ int main(int argc, char** argv)
     bench::Stats stats;
     bench::AudioPlayer audio(*controller, stats);
 
+    // ---- 音频设备：controller初始化完即可取输出参数打开，无需等首个音频帧 ----
+    // 无音频流或设备打开失败时置drainOnly：音频帧无人消费会填满队列阻塞demux线程
+    bool audioDrainOnly = false;
+    if (auto params = controller->audioParams()) {
+        if (audio.start(params->sampleRate, params->channels)) {
+            stats.onAudioStarted(params->sampleRate, params->channels);
+            std::println("音频设备已开启: {}Hz x {}声道 (S16LE)", params->sampleRate, params->channels);
+        } else {
+            std::println("警告: 打开SDL音频设备失败({}), 转为只排空音频队列", SDL_GetError());
+            audioDrainOnly = true;
+        }
+    } else {
+        audioDrainOnly = true; // 无音频流
+    }
+
     SDL_Texture* texture = nullptr; // YUV420P -> SDL_PIXELFORMAT_IYUV
     int texW = 0;
     int texH = 0;
@@ -103,7 +118,6 @@ int main(int argc, char** argv)
     int64_t lastShownPtsUs = 0;
     double lastSeekTargetSec = 0.0;
     bool awaitSeekFrame = false; // seek已发出、尚未等到新serial首帧
-    bool audioGaveUp = false; // 音频设备打开失败，只排空队列不播放
 
     const auto seekTo = [&](double target) {
         if (durationSec > 0) {
@@ -176,25 +190,8 @@ int main(int argc, char** argv)
             }
         }
 
-        // ---- 音频启动：设备打开前由主线程拉首帧取格式；失败则每圈排空队列 ----
-        if (!audio.started() && !audioGaveUp) {
-            if (controller::FramePtr frame = controller->nextAudioFrame()) {
-                if (frame->type() == controller::IFrame::FrameType::Normal) {
-                    const int rate = frame->sampleRate();
-                    const int ch = frame->channels();
-                    if (audio.start(rate, ch, std::move(frame))) {
-                        stats.onAudioStarted(rate, ch);
-                        std::println("音频设备已开启: {}Hz x {}声道 (S16LE)", rate, ch);
-                    } else {
-                        std::println("警告: 打开SDL音频设备失败({}), 转为只排空音频队列", SDL_GetError());
-                        audioGaveUp = true;
-                    }
-                }
-                // End帧：音频流为空或已结束，等seek复活后继续尝试
-            }
-        }
-        if (audioGaveUp) {
-            // 音频帧无人消费会填满队列阻塞demux线程，进而拖垮视频
+        // ---- 音频排空：未开设备时音频帧无人消费会填满队列阻塞demux线程，进而拖垮视频 ----
+        if (audioDrainOnly) {
             for (int i = 0; i < 16; ++i) {
                 if (!controller->nextAudioFrame()) {
                     break;

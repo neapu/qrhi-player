@@ -177,6 +177,15 @@ bool Controller::initialize()
                 LOGE("Failed to create Audio DecodeWorker");
                 return false;
             }
+            // 从已打开的解码上下文取输出参数(比codecpar更准，解码器open时可能修正)；
+            // SwrProcessor对采样率/声道是透传，帧参数即解码器参数，采样格式固定为S16
+            if (const auto* codecCtx = m_audioWorker->codecContext()) {
+                AudioParams params;
+                params.sampleRate = codecCtx->sample_rate;
+                params.channels = codecCtx->ch_layout.nb_channels;
+                params.sampleFormat = IFrame::SampleFormat::S16LE;
+                m_audioParams = params;
+            }
         }
     }
 
@@ -260,6 +269,11 @@ void Controller::audioRenderTime(int64_t renderTimeUs)
     }
     // 中等偏差：以微调速率平滑收敛，时钟单调连续，不产生跳变
     reanchorLocked(clockUsLocked(), driftUs > 0 ? SYNC_CATCH_UP_SPEED : SYNC_FALL_BACK_SPEED);
+}
+
+std::optional<IController::AudioParams> Controller::audioParams() const
+{
+    return m_audioParams;
 }
 
 double Controller::duration() const

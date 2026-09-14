@@ -16,12 +16,12 @@ AudioPlayer::~AudioPlayer()
     stop();
 }
 
-bool AudioPlayer::start(int sampleRate, int channels, controller::FramePtr firstFrame)
+bool AudioPlayer::start(int sampleRate, int channels)
 {
     if (m_device) {
         return true;
     }
-    if (!firstFrame || sampleRate <= 0 || channels <= 0) {
+    if (sampleRate <= 0 || channels <= 0) {
         return false;
     }
 
@@ -41,11 +41,12 @@ bool AudioPlayer::start(int sampleRate, int channels, controller::FramePtr first
     m_bytesPerSec = sampleRate * channels * 2;
     {
         std::lock_guard lock(m_mutex);
-        m_current = std::move(firstFrame);
+        m_current.reset();
         m_offsetBytes = 0;
-        m_maxSerial = m_current ? m_current->serial() : -1;
+        m_maxSerial = -1;
         m_lastFrameEndUs = kNoPts;
         m_sawEnd = false;
+        m_gotFirstFrame = false;
     }
     SDL_PauseAudioDevice(m_device, 0);
     return true;
@@ -86,7 +87,8 @@ void AudioPlayer::fill(uint8_t* stream, int len)
             controller::FramePtr frame = m_ctrl.nextAudioFrame();
             if (!frame) {
                 // 暂停/时钟未到/队列暂时为空/EOF停泊；仅真正的饥饿才计underrun
-                if (!m_ctrl.isPaused() && !m_sawEnd) {
+                // 首帧到达前是正常起播缓冲，不计
+                if (!m_ctrl.isPaused() && !m_sawEnd && m_gotFirstFrame) {
                     const auto now = std::chrono::steady_clock::now();
                     if (m_starveStart == std::chrono::steady_clock::time_point{}) {
                         m_starveStart = now;
@@ -116,6 +118,7 @@ void AudioPlayer::fill(uint8_t* stream, int len)
             }
             m_maxSerial = frame->serial();
             m_sawEnd = false;
+            m_gotFirstFrame = true;
             m_stats.onAudioFrame(frame->pts(), frame->samples());
             m_current = std::move(frame);
             m_offsetBytes = 0;

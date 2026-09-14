@@ -15,6 +15,7 @@ public:
     virtual FramePtr nextVideoFrame() override;
     virtual FramePtr nextAudioFrame() override;
     virtual void audioRenderTime(int64_t renderTimeUs) override;
+    virtual std::optional<AudioParams> audioParams() const override;
     virtual double duration() const override;
     virtual void seek(double timepoint) override;
     virtual void pauseOrResume() override;
@@ -33,6 +34,8 @@ private:
     std::unique_ptr<DemuxerWorker> m_demuxerWorker{nullptr};
     std::unique_ptr<DecodeWorker> m_videoWorker{nullptr};
     std::unique_ptr<DecodeWorker> m_audioWorker{nullptr};
+    // 仅在initialize()内写入、之后只读，无需加锁
+    std::optional<AudioParams> m_audioParams{};
 
     struct Clock {
         // 时钟是跨线程共享的可变状态，线程安全由mutex保证；

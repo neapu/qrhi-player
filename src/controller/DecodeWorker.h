@@ -40,6 +40,9 @@ public:
 
     int streamIndex() const;
 
+    // 已打开的解码上下文，输出帧的参数以此为准；create失败时为nullptr
+    const AVCodecContext* codecContext() const { return m_decoder ? m_decoder->codecContext() : nullptr; }
+
     // 消费端累计丢弃的帧数，用于统计/调试
     uint64_t droppedFrames() const { return m_droppedFrames.load(std::memory_order_relaxed); }
 

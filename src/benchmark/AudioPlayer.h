@@ -23,10 +23,10 @@ public:
     AudioPlayer(const AudioPlayer&) = delete;
     AudioPlayer& operator=(const AudioPlayer&) = delete;
 
-    // 主线程调用：以首个音频帧的参数打开设备并注入该帧
-    bool start(int sampleRate, int channels, controller::FramePtr firstFrame);
+    // 主线程调用：以controller::IController::audioParams报告的参数打开设备，
+    // 首帧及后续帧由音频回调线程按需拉取
+    bool start(int sampleRate, int channels);
     void stop();
-    bool started() const { return m_device != 0; }
 
 private:
     static void SDLCALL audioCallback(void* userdata, Uint8* stream, int len);
@@ -47,6 +47,7 @@ private:
     int64_t m_lastFrameEndUs = kNoPts; // 最近耗尽帧的结束位置（underrun期间的上报值）
     int m_maxSerial = -1;           // 见过的最大serial，seek后过期帧据此丢弃
     bool m_sawEnd = false;          // 音频EOF：静音填充且不再上报位置
+    bool m_gotFirstFrame = false;   // 起播宽容期：首帧到达前的静音不算underrun
     // 饥饿检测：短暂断流逐回调计underrun，持续超过2s记一次stall不再刷计数
     std::chrono::steady_clock::time_point m_starveStart{};
     bool m_stallCounted = false;

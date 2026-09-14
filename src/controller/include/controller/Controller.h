@@ -1,5 +1,6 @@
 #pragma once
 #include <memory>
+#include <optional>
 #include <string>
 #include <functional>
 #include "export.h"
@@ -46,6 +47,22 @@ public:
      * @note 内部按偏差大小分级校准：小偏差忽略，中等偏差以微调速率平滑收敛，大偏差直接对齐
      */
     virtual void audioRenderTime(int64_t renderTimeUs) = 0;
+
+    /**
+     * @brief 音频输出参数，即nextAudioFrame交付帧的参数
+     */
+    struct AudioParams {
+        int sampleRate{0};                                          // 采样率(Hz)
+        int channels{0};                                            // 声道数
+        IFrame::SampleFormat sampleFormat{IFrame::SampleFormat::None}; // 采样格式
+    };
+
+    /**
+     * @brief 获取音频输出参数。初始化完成后即可调用，供渲染侧提前打开音频设备，
+     *        无需等首个音频帧到达
+     * @return std::optional<AudioParams> 参数；媒体无音频流时返回空
+     */
+    virtual std::optional<AudioParams> audioParams() const = 0;
 
     /**
      * @brief 获取媒体的总时长

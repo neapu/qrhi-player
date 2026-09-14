@@ -23,6 +23,9 @@ public:
 
     virtual void flush();
 
+    // 已打开的解码上下文：输出帧的采样率/声道等以此为准(create成功后有效)
+    const AVCodecContext* codecContext() const { return m_codecCtx.get(); }
+
 protected:
     Decoder() = default;
     bool initialize(const AVStream* stream, std::shared_ptr<Logger> logger);
