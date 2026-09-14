@@ -2,6 +2,8 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include "Logger.h"
 #include "Demuxer.h"
 
@@ -20,8 +22,13 @@ public:
     int serial() const { return m_serial.load(); }
     void seek(int streamIndex, int64_t pts);
 
+    double duration() const;
+
+    // 调用约定：整个生命周期只能调用一次start()，stop()用于停止线程，停止后不能再启动
+    void start();
     void stop();
 
+    std::unique_ptr<Demuxer>& demuxer() { return m_demuxer; }
 private:
     DemuxerWorker() = default;
     bool initialize(const Params& params);
@@ -40,7 +47,14 @@ private:
         int streamIndex{0};
         int64_t pts{AV_NOPTS_VALUE};
     };
-    std::atomic<SeekRequest> m_seekRequest;
+
+    // EOF后workerFunc阻塞在m_seekCV上等待seek请求或退出。
+    // m_seekRequest的所有读写都在m_seekMutex内进行：
+    // 修改条件变量谓词依赖的状态必须在持锁时完成，否则存在丢唤醒窗口，
+    // 因此不需要std::atomic
+    std::mutex m_seekMutex;
+    std::condition_variable m_seekCV;
+    SeekRequest m_seekRequest;
 };
 
 } // namespace controller

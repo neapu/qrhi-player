@@ -16,6 +16,8 @@ public:
     void setSerial(int serial);
     int serial() const;
 
+    int streamIndex() const;
+
     const AVPacket* avPacket() const;
     AVPacket* avPacket();
 

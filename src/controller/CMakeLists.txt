@@ -9,6 +9,9 @@ add_library(${LIB_NAME} SHARED
     Demuxer.cpp
     DemuxerWorker.cpp
     DecodeWorker.cpp
+    FrameProcessor.cpp
+    SwsProcessor.cpp
+    SwrProcessor.cpp
 )
 
 target_compile_definitions(${LIB_NAME} PRIVATE CONTROLLER_LIBRARY)

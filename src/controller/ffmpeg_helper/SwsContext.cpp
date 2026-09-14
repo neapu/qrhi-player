@@ -18,4 +18,10 @@ SwsContextPtr createSwsContext(int srcW, int srcH, AVPixelFormat srcFormat,
     return SwsContextPtr(ctx);
 }
 
+SwsContextPtr allocateSwsContext()
+{
+    SwsContext* ctx = sws_alloc_context();
+    return SwsContextPtr(ctx);
+}
+
 } // namespace fh

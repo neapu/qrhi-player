@@ -82,4 +82,40 @@ bool Demuxer::seek(int streamIndex, int64_t pts)
     return true;
 }
 
+double Demuxer::duration() const
+{
+    if (!m_inputContext) {
+        LOGW("Input context is not initialized");
+        return 0.0;
+    }
+
+    // Prefer the duration recorded in the container (in AV_TIME_BASE units).
+    if (m_inputContext->duration != AV_NOPTS_VALUE && m_inputContext->duration > 0) {
+        return static_cast<double>(m_inputContext->duration) / AV_TIME_BASE;
+    }
+
+    // Fall back to the stream duration, preferring video over audio.
+    const AVStream* fallback = nullptr;
+    for (unsigned int i = 0; i < m_inputContext->nb_streams; ++i) {
+        const AVStream* s = m_inputContext->streams[i];
+        if (!s || !s->codecpar || s->duration == AV_NOPTS_VALUE || s->duration <= 0) {
+            continue;
+        }
+        if (s->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            fallback = s;
+            break;
+        }
+        if (s->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && !fallback) {
+            fallback = s;
+        }
+    }
+
+    if (fallback) {
+        return static_cast<double>(fallback->duration) * av_q2d(fallback->time_base);
+    }
+
+    LOGW("Duration is unknown for both container and streams");
+    return 0.0;
+}
+
 } // namespace controller

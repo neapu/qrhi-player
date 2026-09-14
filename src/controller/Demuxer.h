@@ -15,6 +15,8 @@ public:
 
     controller::PacketPtr readPacket(int serial);
     bool seek(int streamIndex, int64_t pts);
+
+    double duration() const;
     
 private:
     Demuxer() = default;

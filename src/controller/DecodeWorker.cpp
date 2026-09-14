@@ -5,10 +5,10 @@ namespace controller {
 // 时钟策略为false时，允许放行的阈值
 constexpr int64_t CONTROL_CLOCK_THRESHOLD_US = 200000; // 200ms
 
-std::unique_ptr<DecodeWorker> DecodeWorker::create(const AVStream* stream, std::shared_ptr<Logger> logger)
+std::unique_ptr<DecodeWorker> DecodeWorker::create(const Params& params)
 {
     auto worker = std::unique_ptr<DecodeWorker>(new DecodeWorker());
-    if (worker->initialize(stream, logger)) {
+    if (worker->initialize(params)) {
         return worker;
     }
     return nullptr;
@@ -16,15 +16,6 @@ std::unique_ptr<DecodeWorker> DecodeWorker::create(const AVStream* stream, std::
 
 DecodeWorker::DecodeWorker()
 {
-    // 先大概定一个默认值，子类根据自身类型调整合适的深度
-    m_maxPacketQueueDepth = 100;
-    m_maxFrameQueueDepth = 5;
-    // 丢帧策略，子类可以根据自身类型调整
-    m_canDropFrames = false;
-    // 时钟策略，子类可以根据自身类型调整
-    // 为true时，取帧时根据时钟放行(视频模式)
-    // 为false时，连续播放不受时钟控制，只有跳变超过阈值时才会被时钟控制(音频模式)
-    m_controlClock = true;
 }
 
 DecodeWorker::~DecodeWorker()
@@ -32,18 +23,19 @@ DecodeWorker::~DecodeWorker()
     stop();
 }
 
-bool DecodeWorker::initialize(const AVStream* stream, std::shared_ptr<Logger> logger)
+bool DecodeWorker::initialize(const Params& params)
 {
-    if (!logger) {
+    if (!params.logger) {
         return false;
     }
-    m_logger = logger;
-    m_stream = stream;
+    m_logger = params.logger;
+    m_stream = params.stream;
+    m_frameProcessors = params.frameProcessors;
 
     auto tracer = m_logger->trace();
 
     // 1.创建解码器
-    m_decoder = Decoder::create(stream, m_logger);
+    m_decoder = Decoder::create(m_stream, m_logger);
     if (!m_decoder) {
         LOGE("Failed to create decoder");
         return false;
@@ -138,6 +130,11 @@ void DecodeWorker::stop()
     }
 }
 
+int DecodeWorker::streamIndex() const
+{
+    return m_stream ? m_stream->index : -1;
+}
+
 void DecodeWorker::workerFunc()
 {
     FUNC_TRACE();
@@ -176,7 +173,7 @@ void DecodeWorker::workerFunc()
             serial = packet->serial();
         }
         bool isEnd = packet->type() == Packet::PacketType::End;
-        auto frames = decodePacket(std::move(packet), serial);
+        auto frames = decodePacket(std::move(packet));
         for (auto& f : frames) {
             std::unique_lock<std::mutex> lock(m_frameQueueMutex);
             m_frameQueueCV.wait(lock, [this]() {
@@ -200,9 +197,9 @@ void DecodeWorker::workerFunc()
     }
 }
 
-std::vector<std::unique_ptr<Frame>> DecodeWorker::decodePacket(PacketPtr&& packet, int serial)
+std::vector<std::unique_ptr<Frame>> DecodeWorker::decodePacket(PacketPtr&& packet)
 {
-    if (!m_decoder) {
+    if (!m_decoder || !packet) { // 正常流程下packet不会为nullptr
         return {};
     }
 
@@ -214,7 +211,7 @@ std::vector<std::unique_ptr<Frame>> DecodeWorker::decodePacket(PacketPtr&& packe
 
     std::vector<std::unique_ptr<Frame>> frames;
     for (;;) {
-        auto recvRet = m_decoder->receiveFrame(serial);
+        auto recvRet = m_decoder->receiveFrame(packet->serial());
         if (!recvRet) {
             int err = recvRet.error();
             if (err != AVERROR(EAGAIN) && err != AVERROR_EOF) {
@@ -232,12 +229,31 @@ std::vector<std::unique_ptr<Frame>> DecodeWorker::decodePacket(PacketPtr&& packe
 
 std::unique_ptr<Frame> DecodeWorker::postProcessFrame(std::unique_ptr<Frame>&& frame)
 {
-    auto timebase = frame ? frame->timebase() : AVRational{0, 1};
+    if (!frame) { // 正常情况下不会为nullptr
+        return nullptr;
+    }
+
+    // 按顺序执行处理链，处理器返回nullptr表示处理失败，丢弃该帧
+    if (!m_frameProcessors.empty()) {
+        ProcessorContext context{m_stream, m_logger};
+        for (auto& processor : m_frameProcessors) {
+            if (!processor) {
+                continue;
+            }
+            frame = processor->process(std::move(frame), context);
+            if (!frame) {
+                return nullptr;
+            }
+        }
+    }
+
+    // 处理链输出的帧不会设置timebase，需要回退用流的timebase
+    auto timebase = frame->timebase();
     if (timebase.num == 0) {
         timebase = m_stream ? m_stream->time_base : AVRational{0, 1};
     }
     // pts单位转换为微秒
-    if (frame && frame->pts() != AV_NOPTS_VALUE && timebase.num != 0) {
+    if (frame->pts() != AV_NOPTS_VALUE && timebase.num != 0) {
         int64_t ptsUs = av_rescale_q(frame->pts(), timebase, AVRational{1, 1000000});
         frame->setPts(ptsUs);
     }

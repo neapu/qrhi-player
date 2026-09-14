@@ -34,6 +34,11 @@ int Packet::serial() const
     return m_serial;
 }
 
+int Packet::streamIndex() const
+{
+    return m_packet ? m_packet->stream_index : -1;
+}
+
 const AVPacket* Packet::avPacket() const
 {
     return m_packet ? m_packet.get() : nullptr;
