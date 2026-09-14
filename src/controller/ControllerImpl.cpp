@@ -315,6 +315,17 @@ bool Controller::isPaused() const
 
 void Controller::onPacketRead(controller::PacketPtr&& packet)
 {
+    if (packet->type() == controller::Packet::PacketType::End) {
+        // 流结束，音视频线程都要通知到
+        if (m_videoWorker) {
+            auto endPacket = Packet::create(packet->serial(), controller::Packet::PacketType::End);
+            m_videoWorker->sendPacket(std::move(endPacket));
+        }
+        if (m_audioWorker) {
+            auto endPacket = Packet::create(packet->serial(), controller::Packet::PacketType::End);
+            m_audioWorker->sendPacket(std::move(endPacket));
+        }
+    }
     if (m_videoWorker && m_videoWorker->streamIndex() == packet->streamIndex()) {
         m_videoWorker->sendPacket(std::move(packet));
     } else if (m_audioWorker && m_audioWorker->streamIndex() == packet->streamIndex()) {
