@@ -126,6 +126,12 @@ bool Controller::initialize()
             audioDecodeParams.stream = stream;
             audioDecodeParams.logger = m_logger;
             audioDecodeParams.frameProcessors.push_back(swrProcessor);
+            // 要根据时长计算队列长度
+            double sampleRate = stream->codecpar->sample_rate;
+            sampleRate = sampleRate > 0 ? sampleRate : 44100; // 默认采样率为44100
+            audioDecodeParams.maxPacketQueueDepth = static_cast<size_t>(TARGET_AUDIO_QUEUE_DURATION * sampleRate);
+            audioDecodeParams.canDropFrames = false; // 音频一般不丢帧
+
             m_audioWorker = DecodeWorker::create(audioDecodeParams);
             if (!m_audioWorker) {
                 LOGE("Failed to create Audio DecodeWorker");
