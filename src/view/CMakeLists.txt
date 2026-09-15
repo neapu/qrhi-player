@@ -1,8 +1,11 @@
 set(EXE_NAME "qrhi_player")
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Widgets Svg)
 
 qt_standard_project_setup()
+
+add_subdirectory(video_renderer)
+add_subdirectory(audio_renderer)
 
 qt_add_executable(${EXE_NAME}
     main.cpp
@@ -10,7 +13,19 @@ qt_add_executable(${EXE_NAME}
     MainWindow.cpp
 )
 
-target_link_libraries(${EXE_NAME} PRIVATE Qt6::Core Qt6::Widgets Controller)
+# 播放控件图标：编译进可执行文件，避免运行时依赖外部文件。
+# Qt6::Svg必须显式链接，否则windeployqt不会部署qsvg图像插件，QIcon无法加载SVG
+qt_add_resources(${EXE_NAME} "player_icons"
+    PREFIX "/icons"
+    BASE "images"
+    FILES
+        images/pause.svg
+        images/play.svg
+        images/stop.svg
+        images/volume-up.svg
+)
+
+target_link_libraries(${EXE_NAME} PRIVATE Qt6::Core Qt6::Widgets Qt6::Svg Controller video_renderer audio_renderer)
 
 include(FetchContent)
 

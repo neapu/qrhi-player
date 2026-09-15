@@ -281,6 +281,12 @@ double Controller::duration() const
     return m_demuxerWorker ? m_demuxerWorker->duration() : 0.0;
 }
 
+double Controller::position() const
+{
+    std::lock_guard<std::mutex> lock(m_clock.mutex);
+    return static_cast<double>(clockUsLocked()) / 1'000'000.0;
+}
+
 void Controller::seek(double timepoint)
 {
     if (!m_demuxerWorker) {

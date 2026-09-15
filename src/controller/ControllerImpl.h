@@ -17,6 +17,7 @@ public:
     virtual void audioRenderTime(int64_t renderTimeUs) override;
     virtual std::optional<AudioParams> audioParams() const override;
     virtual double duration() const override;
+    virtual double position() const override;
     virtual void seek(double timepoint) override;
     virtual void pauseOrResume() override;
     virtual bool isPaused() const override;

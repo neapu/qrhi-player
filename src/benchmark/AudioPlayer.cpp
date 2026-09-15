@@ -1,7 +1,5 @@
 #include "AudioPlayer.h"
 #include <cstring>
-// 音频PCM数据只能经rawFrame()按AVFrame读取（公共接口只暴露格式元数据）
-#include <libavutil/frame.h>
 
 namespace bench {
 
@@ -124,12 +122,12 @@ void AudioPlayer::fill(uint8_t* stream, int len)
             m_offsetBytes = 0;
         }
 
-        auto* avf = static_cast<AVFrame*>(m_current->rawFrame());
-        // S16为打包格式，data[0]即交错PCM
-        const size_t frameBytes = static_cast<size_t>(avf->nb_samples) * m_current->channels() * 2;
+        // 打包格式(如S16)的PCM为单块连续缓冲
+        const auto* data = m_current->audioData();
+        const size_t frameBytes = static_cast<size_t>(m_current->audioDataSize());
         const size_t avail = frameBytes - m_offsetBytes;
         const size_t n = std::min(avail, static_cast<size_t>(len) - filled);
-        std::memcpy(stream + filled, avf->data[0] + m_offsetBytes, n);
+        std::memcpy(stream + filled, data + m_offsetBytes, n);
         filled += n;
         m_offsetBytes += n;
         if (m_offsetBytes >= frameBytes) {

@@ -70,6 +70,11 @@ public:
      */
     virtual double duration() const = 0;
     /**
+     * @brief 获取当前播放位置，供UI显示进度
+     * @return double 当前播放位置，单位为秒；暂停时为暂停时冻结的位置
+     */
+    virtual double position() const = 0;
+    /**
      * @brief 跳转到指定的时间点
      * @param timepoint 时间点，单位为秒
      */

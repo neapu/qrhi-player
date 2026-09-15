@@ -35,6 +35,9 @@ public:
     int channels() const override;
     int samples() const override;
 
+    uint8_t* audioData() const override;
+    int audioDataSize() const override;
+
     int64_t pts() const override;
     void setPts(int64_t pts);
 

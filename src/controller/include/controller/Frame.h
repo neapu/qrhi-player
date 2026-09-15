@@ -113,6 +113,17 @@ public:
     virtual int samples() const = 0;
 
     /**
+     * @brief 获取音频PCM数据指针，仅适用于打包采样格式(如S16LE)，相当于AVFrame中的data[0]字段
+     * @return uint8_t* PCM数据指针
+     */
+    virtual uint8_t* audioData() const = 0;
+    /**
+     * @brief 获取音频PCM数据的字节数，等于采样数x声道数x每采样字节数
+     * @return int PCM数据的字节数
+     */
+    virtual int audioDataSize() const = 0;
+
+    /**
      * @brief 获取底层的AVFrame原始指针
      * @return void* 底层的AVFrame原始指针
      */

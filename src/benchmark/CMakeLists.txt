@@ -21,8 +21,6 @@ add_executable(${EXE_NAME}
 target_link_libraries(${EXE_NAME} PRIVATE
     Controller
     SDL2::SDL2
-    # 音频PCM需经rawFrame()按AVFrame读取，ffmpeg_helper PUBLIC携带FFmpeg头与导入库
-    ffmpeg_helper
 )
 
 # 控制台程序自带入口点：禁用SDL_main对main的宏替换

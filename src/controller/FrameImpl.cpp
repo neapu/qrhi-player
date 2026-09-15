@@ -159,6 +159,20 @@ int Frame::samples() const
     return m_frame ? m_frame->nb_samples : 0;
 }
 
+uint8_t* Frame::audioData() const
+{
+    return m_frame ? m_frame->data[0] : nullptr;
+}
+
+int Frame::audioDataSize() const
+{
+    if (!m_frame) {
+        return 0;
+    }
+    const int bytesPerSample = av_get_bytes_per_sample(static_cast<AVSampleFormat>(m_frame->format));
+    return bytesPerSample > 0 ? m_frame->nb_samples * m_frame->ch_layout.nb_channels * bytesPerSample : 0;
+}
+
 int64_t Frame::pts() const
 {
     return m_frame ? m_frame->pts : 0;
