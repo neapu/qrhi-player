@@ -5,7 +5,9 @@
 namespace {
 constexpr auto MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 constexpr auto MAX_FILES = 5; // 最大保留的日志文件数量
-std::shared_ptr<spdlog::logger> createModuleLogger(const std::string& moduleName, const std::string& logFileName)
+// 注意：WIN32 下定义了 SPDLOG_WCHAR_FILENAMES，spdlog::filename_t 是 std::wstring，
+// 因此文件名参数必须用 spdlog::filename_t / SPDLOG_FILENAME_T 才能跨平台一致
+std::shared_ptr<spdlog::logger> createModuleLogger(const std::string& moduleName, const spdlog::filename_t& logFileName)
 {
     // 创建主程序logger
     auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
@@ -74,8 +76,8 @@ LogManager& LogManager::instance()
 
 LogManager::LogManager()
 {
-    m_mainLogger = createModuleLogger("main", "main.log");
-    m_controllerLogger = createModuleLogger("controller", "controller.log");
+    m_mainLogger = createModuleLogger("main", SPDLOG_FILENAME_T("main.log"));
+    m_controllerLogger = createModuleLogger("controller", SPDLOG_FILENAME_T("controller.log"));
 }
 
 void LogManager::logQtMessage(QtMsgType type, const QMessageLogContext& context, const QString& message)

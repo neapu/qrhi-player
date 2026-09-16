@@ -1,0 +1,9 @@
+{
+  // .clang-format 是 YAML 配置，不是 C++ 源码。
+  // 不这样声明的话，C/C++ 扩展会把它当源码解析，对每行 "# ..." 报"无法识别的预处理指令"
+  "files.associations": {
+    "**/.clang-format": "yaml"
+  },
+  // 与 .clang-format 里的 ColumnLimit 保持一致
+  "editor.rulers": [120]
+}

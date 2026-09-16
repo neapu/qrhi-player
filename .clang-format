@@ -1,0 +1,124 @@
+# qrhi-player C++ 代码风格
+# 依据 src/controller 模块现有代码整理，用 clang-format 23 逐文件比对校准过。
+# 用法：clang-format -i --style=file <file>
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++23
+
+# ---------- 列宽与缩进 ----------
+# 现有 2544 行中仅 5 行超过 120 列（最长 134），以 120 为准
+ColumnLimit: 120
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+
+# ---------- 括号风格 ----------
+# 函数定义的花括号独占一行(Allman)，控制语句/类/结构体/命名空间同行
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterControlStatement: false
+  AfterClass: false
+  AfterStruct: false
+  AfterEnum: false
+  AfterNamespace: false
+  AfterUnion: false
+  AfterExternBlock: false
+  BeforeCatch: false
+  BeforeElse: false
+  BeforeWhile: false
+  BeforeLambdaBody: false
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+
+# ---------- 类/命名空间 ----------
+# class IController { 后 public: 顶格；命名空间内容不缩进
+AccessModifierOffset: -4
+IndentAccessModifiers: false
+NamespaceIndentation: None
+# 统一的 } // namespace xxx 结尾注释（现有混用 "// controller namespace"，以多数写法为准）
+FixNamespaceComments: true
+ShortNamespaceLines: 0
+# 不强行增删访问说明符/函数定义之间的空行，保留作者手工分段
+EmptyLineBeforeAccessModifier: Leave
+SeparateDefinitionBlocks: Leave
+MaxEmptyLinesToKeep: 1
+
+# ---------- 短语句 ----------
+# 类内一行式访问器保留（如 int serial() const { return m_serial; }），
+# 类外空函数体保持三行（如 Controller::Controller(...)\n{\n}）
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Empty
+# 无花括号的单语句 if/for/while 统一补上花括号
+InsertBraces: true
+# 移除多余括号/修正大小写等同性清理，保持不动
+RemoveParentheses: Leave
+QualifierAlignment: Leave
+
+# ---------- 断行 ----------
+# 参数换行用固定 4 空格续行缩进，不对齐到左括号之后
+AlignAfterOpenBracket: DontAlign
+AlignOperands: DontAlign
+BinPackArguments: true
+BinPackParameters: true
+# 二元运算符换行时置于行首（如 && / ||），三元运算符同样
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeTernaryOperators: true
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AlwaysBreakAfterReturnType: None
+# template <typename T> 与函数签名分行
+AlwaysBreakTemplateDeclarations: Yes
+# 构造函数初始化列表：冒号另起一行
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: BinPack
+ConstructorInitializerIndentWidth: 4
+
+# ---------- 空格与对齐 ----------
+# 指针/引用左贴：const std::string& 、uint8_t* p
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+# if/for/switch 后有空格，函数名与调用后无空格
+SpaceBeforeParens: ControlStatements
+SpaceBeforeInheritanceColon: true
+SpaceAfterTemplateKeyword: true
+SpacesInParentheses: false
+SpaceInEmptyParentheses: false
+SpaceBeforeRangeBasedForLoopColon: true
+Cpp11BracedListStyle: true
+# 行尾注释对齐到同一列，至少一个空格
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 1
+# 宏的续行反斜杠紧贴内容，不填充/对齐到某一列
+AlignEscapedNewlines: DontAlign
+AlignConsecutiveMacros: false
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+
+# ---------- include ----------
+# 按字母序排序，保留手工分组(空行分组)
+SortIncludes: CaseSensitive
+SortUsingDeclarations: Lexicographic
+IncludeBlocks: Preserve
+
+# ---------- 注释 ----------
+# 中文注释不重排：clang-format 按 1 字符宽计算中文，折行会破坏语义
+ReflowComments: false
+
+# ---------- 其他 ----------
+IndentCaseLabels: true
+IndentPPDirectives: None
+InsertNewlineAtEOF: true
+# lambda 体按 lambda 所在行缩进
+LambdaBodyIndentation: Signature
+PenaltyReturnTypeOnItsOwnLine: 60
