@@ -6,6 +6,8 @@ qt_standard_project_setup()
 
 qt_add_executable(${EXE_NAME}
     main.cpp
+    LogManager.h
+    LogManager.cpp
 )
 
 target_link_libraries(${EXE_NAME} PRIVATE Qt6::Core Qt6::Widgets Qt6::Svg Controller video_renderer audio_renderer)
