@@ -104,6 +104,11 @@ void QRhiVideoRenderer::initialize(QRhiCommandBuffer* cb)
         m_rhi = rhi();
         needReinitialize = true;
     }
+    if (!m_rhi) {
+        qCritical() << "Failed to obtain QRhi instance.";
+        emit errorOccurred("Failed to obtain QRhi instance.");
+        return;
+    }
 
     if (!needReinitialize) {
         return;

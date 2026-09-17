@@ -15,8 +15,14 @@ MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
     setWindowTitle("QRHI Player");
     resize(800, 600);
 
-    createMenuBar();
+    // 必须先创建 QRhiWidget 子部件，再创建菜单栏。
+    // macOS 上 QMenuBar 是原生菜单栏，QMenuBarPrivate::handleReparent() 会调用
+    // newWindow->createWinId() 提前创建顶层窗口，而窗口在创建时会通过
+    // q_evaluateRhiConfig() 遍历子部件决定是否使用 RHI 合成（Metal）。
+    // 如果此时 QRhiVideoRenderer 还不存在，窗口就会退化为光栅（QCALayerBackingStore）合成，
+    // 之后再创建的 QRhiWidget 拿不到 QRhi，只会不断报 "QRhiWidget: No QRhi"。
     createCentralWidget();
+    createMenuBar();
 
     m_videoRenderer->setGetFrameCallback([this]() {
         return getVideoFrame();
