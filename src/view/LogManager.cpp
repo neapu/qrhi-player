@@ -1,10 +1,42 @@
 #include "LogManager.h"
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <QDir>
+#include <QStandardPaths>
+
+// 防御：DEBUG 已定义但 SOURCE_DIR 缺失时（如手动编译）退化为当前目录
+#ifndef SOURCE_DIR
+#define SOURCE_DIR "."
+#endif
 
 namespace {
 constexpr auto MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 constexpr auto MAX_FILES = 5; // 最大保留的日志文件数量
+
+// Debug 写到源码目录的 logs/ 便于开发查看；Release 写到 %APPDATA%/<应用名>/logs，
+// AppDataLocation 依赖 QCoreApplication::applicationName()，需在 LogManager 初始化前创建 QApplication
+QString logDirectory()
+{
+#ifdef DEBUG
+    const QString dir = QString::fromUtf8(SOURCE_DIR) + QStringLiteral("/logs");
+#else
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/logs");
+#endif
+    if (!QDir().mkpath(dir)) {
+        // 目录创建失败时退到临时目录，避免文件 sink 构造抛异常导致程序无法启动
+        return QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    }
+    return dir;
+}
+
+spdlog::filename_t toFilenameT(const QString& path)
+{
+#ifdef SPDLOG_WCHAR_FILENAMES
+    return path.toStdWString();
+#else
+    return path.toStdString();
+#endif
+}
 // 注意：WIN32 下定义了 SPDLOG_WCHAR_FILENAMES，spdlog::filename_t 是 std::wstring，
 // 因此文件名参数必须用 spdlog::filename_t / SPDLOG_FILENAME_T 才能跨平台一致
 std::shared_ptr<spdlog::logger> createModuleLogger(const std::string& moduleName, const spdlog::filename_t& logFileName)
@@ -76,8 +108,9 @@ LogManager& LogManager::instance()
 
 LogManager::LogManager()
 {
-    m_mainLogger = createModuleLogger("main", SPDLOG_FILENAME_T("main.log"));
-    m_controllerLogger = createModuleLogger("controller", SPDLOG_FILENAME_T("controller.log"));
+    const QString logDir = logDirectory();
+    m_mainLogger = createModuleLogger("main", toFilenameT(logDir + QStringLiteral("/main.log")));
+    m_controllerLogger = createModuleLogger("controller", toFilenameT(logDir + QStringLiteral("/controller.log")));
 }
 
 void LogManager::logQtMessage(QtMsgType type, const QMessageLogContext& context, const QString& message)

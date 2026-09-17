@@ -32,11 +32,15 @@ FetchContent_MakeAvailable(spdlog)
 
 target_link_libraries(${EXE_NAME} PRIVATE spdlog::spdlog)
 
+add_subdirectory(video_renderer)
+
+target_link_libraries(${EXE_NAME} PRIVATE video_renderer)
+
 if (WIN32)
     # Debug 配置为控制台应用程序，方便调试；Release 保持 GUI 程序。
     # 用生成器表达式而非 CMAKE_BUILD_TYPE 判断，兼容多配置生成器（VS / Ninja Multi-Config）
     set_target_properties(${EXE_NAME} PROPERTIES
-        WIN32_EXECUTABLE $<CONFIG:Debug>
+        WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>
     )
 
     # 配置Windows平台下，自动拷贝Qt依赖库到bin目录

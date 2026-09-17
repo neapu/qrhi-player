@@ -1,11 +1,16 @@
 #include "MainWindow.h"
 #include <QMenuBar>
 #include <QFileDialog>
+#include <QVBoxLayout>
+#include <QMessageBox>
+#include <QApplication>
+#include "LogManager.h"
 
 namespace view {
 MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
     : QMainWindow(parent)
 {
+    qInfo() << "MainWindow created";
     if (!commandInputFile.isEmpty()) {
         openVideo(commandInputFile);
     }
@@ -14,6 +19,11 @@ MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
     resize(800, 600);
 
     createMenuBar();
+    createCentralWidget();
+
+    m_videoRenderer->setGetFrameCallback([this]() {
+        return getVideoFrame();
+    });
 }
 
 MainWindow::~MainWindow()
@@ -22,12 +32,26 @@ MainWindow::~MainWindow()
 
 void MainWindow::openVideo(const QString &videoFile)
 {
-    // Implement the logic to open the video file here
+    qInfo() << "Opening video file:" << videoFile;
+    controller::IController::Params params{};
+    params.url = videoFile.toStdString();
+    params.logCallback = [](controller::LogLevel level, const std::string& fileName, int line, const std::string& message) {
+        LogManager::instance().logControllerMessage(level, fileName, line, message);
+    };
+    m_controller = controller::IController::create(params);
+    if (!m_controller) {
+        qCritical() << "Failed to create controller for video file:" << videoFile;
+        return;
+    }
+
+    
+    m_videoRenderer->start();
 }
 
 void MainWindow::closeVideo()
 {
-    // Implement the logic to close the video file here
+    m_videoRenderer->stop();
+    m_controller.reset();
 }
 
 void MainWindow::createMenuBar()
@@ -47,6 +71,49 @@ void MainWindow::createMenuBar()
     connect(exitAction, &QAction::triggered, this, [this]() {
         close();
     });
+}
+
+void MainWindow::createCentralWidget()
+{
+    auto* centralWidget = new QWidget(this);
+    setCentralWidget(centralWidget);
+    auto* layout = new QVBoxLayout(centralWidget);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    m_videoRenderer = new view::QRhiVideoRenderer(centralWidget);
+    connect(m_videoRenderer, &view::QRhiVideoRenderer::errorOccurred, this, &MainWindow::onVideoRendererError);
+    layout->addWidget(m_videoRenderer);
+}
+
+void MainWindow::onVideoRendererError(const QString &error)
+{
+    QMessageBox::critical(this, tr("Video Renderer Error"), error);
+    qFatal() << "Video renderer error:" << error;
+    QApplication::exit(-1);
+}
+
+controller::FramePtr MainWindow::getVideoFrame()
+{
+    if (!m_controller) {
+        return nullptr;
+    }
+    
+
+    // 暂不实现音频，但是音频帧需要消费掉
+    while (m_controller->nextAudioFrame()) {
+        // Consume audio frames without processing
+    }
+
+    while (auto videoFrame = m_controller->nextVideoFrame()) {
+        if (videoFrame->serial() < m_serial) {
+            continue;
+        }
+
+        m_serial = videoFrame->serial();
+        return videoFrame;
+    }
+
+    return nullptr;
 }
 
 } // namespace view

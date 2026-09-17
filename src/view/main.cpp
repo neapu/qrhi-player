@@ -5,6 +5,7 @@
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("qrhi_player")); // 决定 Release 日志的 AppData 路径
     view::LogManager::instance(); // 先初始化
     qInstallMessageHandler([](QtMsgType type, const QMessageLogContext& context, const QString& message) {
         view::LogManager::instance().logQtMessage(type, context, message);
