@@ -123,7 +123,7 @@ bool Controller::initialize()
     auto& demuxer = m_demuxerWorker->demuxer();
     for (int i = 0; i < demuxer->streamCount(); ++i) {
         auto* stream = demuxer->stream(i);
-        if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && !m_videoWorker) {
             SwsProcessor::TargetFormat targetFormat{};
             targetFormat.format = AV_PIX_FMT_YUV420P;
             std::shared_ptr<SwsProcessor> swsProcessor = std::make_shared<SwsProcessor>(targetFormat);
@@ -149,7 +149,7 @@ bool Controller::initialize()
                 LOGE("Failed to create Video DecodeWorker");
                 return false;
             }
-        } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+        } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && !m_audioWorker) {
             SwrProcessor::TargetFormat targetFormat{};
             targetFormat.format = AV_SAMPLE_FMT_S16;
             std::shared_ptr<SwrProcessor> swrProcessor = std::make_shared<SwrProcessor>(targetFormat);

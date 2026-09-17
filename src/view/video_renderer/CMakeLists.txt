@@ -15,8 +15,8 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS ShaderTools)
 
 qt_add_shaders(${LIB_NAME} "shaders"
     FILES
-    shaders/video.vert.glsl
-    shaders/yuv420p.frag.glsl
+    shaders/video.vert
+    shaders/yuv420p.frag
 )
 
 if(Qt6_VERSION VERSION_GREATER_EQUAL "6.9")

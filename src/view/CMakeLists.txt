@@ -33,8 +33,9 @@ FetchContent_MakeAvailable(spdlog)
 target_link_libraries(${EXE_NAME} PRIVATE spdlog::spdlog)
 
 add_subdirectory(video_renderer)
+add_subdirectory(audio_renderer)
 
-target_link_libraries(${EXE_NAME} PRIVATE video_renderer)
+target_link_libraries(${EXE_NAME} PRIVATE video_renderer audio_renderer)
 
 if (WIN32)
     # Debug 配置为控制台应用程序，方便调试；Release 保持 GUI 程序。

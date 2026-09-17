@@ -23,6 +23,8 @@ public:
 
 signals:
     void errorOccurred(const QString &errorMessage);
+    // 拉取到End帧（播放到流结尾）时触发，每次start()后最多触发一次
+    void playbackFinished();
 
 protected:
     void initialize(QRhiCommandBuffer *cb) override;
@@ -33,6 +35,7 @@ protected:
     void renderFrame(QRhiCommandBuffer* cb, const controller::FramePtr& frame);
 protected:
     bool m_running{false};
+    bool m_endReached{false}; // End帧只投递一次，这里再兜一层，保证playbackFinished不重复触发
     GetFrameCallback m_getFrameCallback{};
     QRhi* m_rhi{nullptr};
 

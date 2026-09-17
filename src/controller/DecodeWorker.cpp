@@ -247,6 +247,7 @@ std::vector<std::unique_ptr<Frame>> DecodeWorker::decodePacket(PacketPtr&& packe
         return {};
     }
 
+    int serial = packet->serial();
     bool ret = m_decoder->sendPacket(std::move(packet));
     if (!ret) {
         LOGE("Failed to send packet to decoder");
@@ -255,7 +256,7 @@ std::vector<std::unique_ptr<Frame>> DecodeWorker::decodePacket(PacketPtr&& packe
 
     std::vector<std::unique_ptr<Frame>> frames;
     for (;;) {
-        auto recvRet = m_decoder->receiveFrame(packet->serial());
+        auto recvRet = m_decoder->receiveFrame(serial);
         if (!recvRet) {
             int err = recvRet.error();
             if (err != AVERROR(EAGAIN) && err != AVERROR_EOF) {

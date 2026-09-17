@@ -31,7 +31,7 @@ protected:
     std::unique_ptr<QRhiShaderResourceBindings> m_srb;
 
     std::unique_ptr<QRhiBuffer> m_vsVertexTransformMatrix; // 对应video.vert中的UBuf变量，绑定位置3
-    std::unique_ptr<QRhiBuffer> m_fsColorRangeConversionMatrix; // 对应yuv420p.frag中的ColorConversionBlock变量，绑定位置4
-    std::unique_ptr<QRhiBuffer> m_fsYUVtoRGBMatrix; // 对应yuv420p.frag中的YUVRangeBlock变量，绑定位置5
+    std::unique_ptr<QRhiBuffer> m_fsColorRangeConversionMatrix; // 对应yuv420p.frag中的ColorRangeBlock变量，绑定位置4，在着色器中先乘
+    std::unique_ptr<QRhiBuffer> m_fsYUVtoRGBMatrix; // 对应yuv420p.frag中的YuvToRGBBlock变量，绑定位置5，在着色器中后乘
 };
 } // namespace view

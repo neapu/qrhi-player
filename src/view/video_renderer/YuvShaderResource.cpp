@@ -4,17 +4,17 @@
 namespace view {
 void YuvShaderResource::updateVertexTransformMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix)
 {
-    rub->updateDynamicBuffer(m_vsVertexTransformMatrix.get(), 0, sizeof(float)*4*4, &matrix);
+    rub->updateDynamicBuffer(m_vsVertexTransformMatrix.get(), 0, sizeof(float)*4*4, matrix.constData());
 }
 
 void YuvShaderResource::updateColorRangeConversionMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix)
 {
-    rub->updateDynamicBuffer(m_fsColorRangeConversionMatrix.get(), 0, sizeof(float)*4*4, &matrix);
+    rub->updateDynamicBuffer(m_fsColorRangeConversionMatrix.get(), 0, sizeof(float)*4*4, matrix.constData());
 }
 
 void YuvShaderResource::updateYUVtoRGBMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix)
 {
-    rub->updateDynamicBuffer(m_fsYUVtoRGBMatrix.get(), 0, sizeof(float)*4*4, &matrix);
+    rub->updateDynamicBuffer(m_fsYUVtoRGBMatrix.get(), 0, sizeof(float)*4*4, matrix.constData());
 }
 
 void YuvShaderResource::updateTexture(QRhiResourceUpdateBatch* rub, const controller::FramePtr& frame)
@@ -39,8 +39,8 @@ void YuvShaderResource::updateTexture(QRhiResourceUpdateBatch* rub, const contro
     };
 
     uploadTextureData(m_yTexture.get(), frame->yData(), frame->width(), frame->height(), frame->yLineSize());
-    uploadTextureData(m_uTexture.get(), frame->uData(), frame->width() / 2, frame->height() / 2, frame->uLineSize());
-    uploadTextureData(m_vTexture.get(), frame->vData(), frame->width() / 2, frame->height() / 2, frame->vLineSize());
+    uploadTextureData(m_uTexture.get(), frame->uData(), (frame->width() + 1) / 2, (frame->height() + 1) / 2, frame->uLineSize());
+    uploadTextureData(m_vTexture.get(), frame->vData(), (frame->width() + 1) / 2, (frame->height() + 1) / 2, frame->vLineSize());
 }
 
 bool YuvShaderResource::initialize(const Params& params)
@@ -57,8 +57,11 @@ bool YuvShaderResource::initialize(const Params& params)
     QRhi* rhi = params.rhi;
 
     // 初始化纹理
-    QSize size = params.size;
-    QSize uvSize(size.width() / 2, size.height() / 2);
+    // 必须记录本次创建的帧尺寸：渲染器用它判断分辨率是否变化，
+    // 不赋值的话size()恒为无效尺寸，渲染器每帧都会重建纹理与管线
+    m_size = params.size;
+    QSize size = m_size;
+    QSize uvSize((size.width() + 1) / 2, (size.height() + 1) / 2);
     m_yTexture.reset(rhi->newTexture(QRhiTexture::R8, size, 1, QRhiTexture::Flags{}));
     m_uTexture.reset(rhi->newTexture(QRhiTexture::R8, uvSize, 1, QRhiTexture::Flags{}));
     m_vTexture.reset(rhi->newTexture(QRhiTexture::R8, uvSize, 1, QRhiTexture::Flags{}));

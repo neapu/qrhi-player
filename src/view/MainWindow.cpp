@@ -11,10 +11,7 @@ MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
     : QMainWindow(parent)
 {
     qInfo() << "MainWindow created";
-    if (!commandInputFile.isEmpty()) {
-        openVideo(commandInputFile);
-    }
-
+    
     setWindowTitle("QRHI Player");
     resize(800, 600);
 
@@ -24,6 +21,10 @@ MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
     m_videoRenderer->setGetFrameCallback([this]() {
         return getVideoFrame();
     });
+
+    if (!commandInputFile.isEmpty()) {
+        openVideo(commandInputFile);
+    }
 }
 
 MainWindow::~MainWindow()
@@ -43,13 +44,28 @@ void MainWindow::openVideo(const QString &videoFile)
         qCritical() << "Failed to create controller for video file:" << videoFile;
         return;
     }
+    if (auto audioParams = m_controller->audioParams()) {
+        AudioRenderer::Params rendererParams{};
+        rendererParams.sampleRate = audioParams->sampleRate;
+        rendererParams.channels = audioParams->channels;
+        rendererParams.frameCallback = [this] {
+            return m_controller->nextAudioFrame();  // 由时序保证 m_controller 不为空
+        };
+        rendererParams.playingAudioPtsCallback = [this] (int64_t pts) {
+            m_controller->audioRenderTime(pts);
+        };
+        m_audioRenderer = view::AudioRenderer::create(rendererParams);
+        if (m_audioRenderer) {
+            m_audioRenderer->setVolume(m_volume);
+        }
+    }
 
-    
     m_videoRenderer->start();
 }
 
 void MainWindow::closeVideo()
 {
+    m_audioRenderer.reset();
     m_videoRenderer->stop();
     m_controller.reset();
 }
@@ -97,11 +113,12 @@ controller::FramePtr MainWindow::getVideoFrame()
     if (!m_controller) {
         return nullptr;
     }
-    
 
-    // 暂不实现音频，但是音频帧需要消费掉
-    while (m_controller->nextAudioFrame()) {
-        // Consume audio frames without processing
+    // 没有音频设备时，需要消费掉音频帧，避免阻塞视频渲染
+    if (!m_audioRenderer) {
+        while (m_controller->nextAudioFrame()) {
+            // Consume audio frames without processing
+        }
     }
 
     while (auto videoFrame = m_controller->nextVideoFrame()) {

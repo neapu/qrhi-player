@@ -1,6 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include "video_renderer/QRhiVideoRenderer.h"
+#include "audio_renderer/AudioRenderer.h"
 #include "controller/Controller.h"
 
 namespace view {
@@ -24,8 +25,10 @@ private slots:
 
 private:
     view::QRhiVideoRenderer* m_videoRenderer{};
+    std::unique_ptr<view::AudioRenderer> m_audioRenderer{};
     controller::ControllerPtr m_controller{};
     int m_serial{-1};
+    float m_volume{1.0f};
 };
 
 } // namespace view

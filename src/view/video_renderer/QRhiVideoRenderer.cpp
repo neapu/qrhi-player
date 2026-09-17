@@ -87,6 +87,7 @@ void QRhiVideoRenderer::start()
 {
     qInfo() << "Starting QRhiVideoRenderer.";
     m_running = true;
+    m_endReached = false; // 重新开始播放，允许结尾信号再次触发
     update();
 }
 
@@ -94,7 +95,6 @@ void QRhiVideoRenderer::stop()
 {
     qInfo() << "Stopping QRhiVideoRenderer.";
     m_running = false;
-    m_getFrameCallback = nullptr;
 }
 
 void QRhiVideoRenderer::initialize(QRhiCommandBuffer* cb)
@@ -154,6 +154,7 @@ void QRhiVideoRenderer::render(QRhiCommandBuffer* cb)
 
     if (!m_getFrameCallback) {
         qWarning() << "No frame callback set.";
+        update(); // 保持垂直同步
         return;
     }
 
@@ -163,6 +164,19 @@ void QRhiVideoRenderer::render(QRhiCommandBuffer* cb)
         update(); // 保持垂直同步
         return;
     }
+
+    if (frame->type() == controller::IFrame::FrameType::End) {
+        // End帧不代表图像，跳过它自身的渲染流程，上一帧画面继续留在屏幕上。
+        // 帧回调由controller保证End帧只投递一次，m_endReached再兜一层防止重复触发
+        if (!m_endReached) {
+            m_endReached = true;
+            qInfo() << "Video playback reached the end of stream.";
+            emit playbackFinished();
+        }
+        update(); // 保持垂直同步
+        return;
+    }
+
     m_currentFrame = frame;
 
     ShaderResource::Type type = ShaderResource::Type::Yuv;
@@ -217,8 +231,8 @@ bool QRhiVideoRenderer::createPipeline(ShaderResource::Type type, const controll
         return false;
     }
 
-    auto vertexShader = loadShader(":/shaders/video.vert.glsl.qsb");
-    auto fragmentShader = loadShader(":/shaders/yuv420p.frag.glsl.qsb");
+    auto vertexShader = loadShader(":/shaders/video.vert.qsb");
+    auto fragmentShader = loadShader(":/shaders/yuv420p.frag.qsb");
     if (!vertexShader.isValid() || !fragmentShader.isValid()) {
         qWarning() << "Failed to load shaders.";
         m_shaderResource.reset();
