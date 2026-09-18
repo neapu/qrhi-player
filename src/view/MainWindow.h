@@ -27,7 +27,6 @@ private:
     controller::FramePtr getVideoFrame();
 
     enum class State {
-        Idle,
         Playing,
         Paused,
         Stopped
@@ -46,6 +45,7 @@ private slots:
     void onPlaybackSliderPressed();
     void onPlaybackSliderReleased();
     void onPlayback(int64_t ptsUs);
+    void onPlaybackFinished();
 
 private:
     view::QRhiVideoRenderer* m_videoRenderer{};
@@ -71,13 +71,15 @@ private:
     QPushButton* m_stopButton{};
     QLabel* m_playbackLabel{};
     
-    State m_state{State::Idle};
+    State m_state{State::Stopped};
 
     bool m_isPlaybackSliderPressed{false};
     QString m_durationText{};
 
     bool m_videoEndFlag{false};
     bool m_audioEndFlag{false};
+
+    QString m_videoFileName{};
 };
 
 } // namespace view

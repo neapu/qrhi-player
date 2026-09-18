@@ -66,6 +66,14 @@ MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
     createCentralWidget();
     createMenuBar();
 
+    connect(m_videoRenderer, &view::QRhiVideoRenderer::errorOccurred, this, &MainWindow::onVideoRendererError);
+    connect(m_videoRenderer, &view::QRhiVideoRenderer::playbackFinished, this, [this]() {
+        m_videoEndFlag = true;
+        if (m_audioEndFlag && m_audioRenderer) {
+            onPlaybackFinished();
+        }
+    });
+
     m_videoRenderer->setGetFrameCallback([this]() {
         return getVideoFrame();
     });
@@ -111,7 +119,7 @@ void MainWindow::openVideo(const QString &videoFile)
         connect(m_audioRenderer.get(), &view::AudioRenderer::playbackFinished, this, [this]() {
             m_audioEndFlag = true;
             if (m_videoEndFlag) {
-                setState(State::Stopped);
+                onPlaybackFinished();
             }
         });
     }
@@ -127,17 +135,17 @@ void MainWindow::openVideo(const QString &videoFile)
     m_videoEndFlag = false;
     m_audioEndFlag = false;
 
-    m_videoRenderer->start();
+    m_videoFileName = videoFile;
     setState(State::Playing);
 }
 
 void MainWindow::closeVideo()
 {
     m_audioRenderer.reset();
-    m_videoRenderer->stop();
     m_controller.reset();
     m_playbackSlider->setEnabled(false);
-    setState(State::Idle);
+    setState(State::Stopped);
+    // 视频保留最后一帧画面，不清理
 }
 
 void MainWindow::createMenuBar()
@@ -160,13 +168,6 @@ void MainWindow::createCentralWidget()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     m_videoRenderer = new view::QRhiVideoRenderer(centralWidget);
-    connect(m_videoRenderer, &view::QRhiVideoRenderer::errorOccurred, this, &MainWindow::onVideoRendererError);
-    connect(m_videoRenderer, &view::QRhiVideoRenderer::playbackFinished, this, [this]() {
-        m_videoEndFlag = true;
-        if (m_audioEndFlag) {
-            setState(State::Stopped);
-        }
-    });
     layout->addWidget(m_videoRenderer, 1);
     createControlWidgets(layout, centralWidget);
 }
@@ -305,17 +306,18 @@ void MainWindow::setState(State state)
 {
     m_state = state;
     switch (m_state) {
-        case State::Idle:
-            m_playOrPauseButton->setIcon(m_playIcon);
-            break;
         case State::Playing:
             m_playOrPauseButton->setIcon(m_pauseIcon);
+            m_videoRenderer->start();
             break;
         case State::Paused:
             m_playOrPauseButton->setIcon(m_playIcon);
+            m_videoRenderer->stop();
             break;
         case State::Stopped:
-            m_playOrPauseButton->setIcon(m_stopIcon);
+            m_playOrPauseButton->setIcon(m_playIcon);
+            m_videoRenderer->stop();
+            m_playbackSlider->setValue(0);
             break;
     }
 }
@@ -323,9 +325,6 @@ void MainWindow::setState(State state)
 void MainWindow::onPlayOrPauseClicked()
 {
     switch (m_state) {
-        case State::Idle:
-            openFile();
-            break;
         case State::Playing:
             if (!m_controller->isPaused()) m_controller->pauseOrResume();
             setState(State::Paused);
@@ -335,19 +334,18 @@ void MainWindow::onPlayOrPauseClicked()
             setState(State::Playing);
             break;
         case State::Stopped:
-            m_controller->seek(0);
-            if (m_controller->isPaused()) {
-                m_controller->pauseOrResume();
+            if (!m_videoFileName.isEmpty()) {
+                openVideo(m_videoFileName);
             }
-            setState(State::Playing);
             break;
     };
 }
 
 void MainWindow::onStopClicked()
 {
-    if (m_state != State::Idle) {
+    if (m_state != State::Stopped) {
         closeVideo();
+        m_videoRenderer->clear();
     }
 }
 
@@ -359,17 +357,34 @@ void MainWindow::onPlaybackSliderPressed()
 void MainWindow::onPlaybackSliderReleased()
 {
     m_isPlaybackSliderPressed = false;
-    m_controller->seek(static_cast<double>(m_playbackSlider->value()) / 1000.0);
+    const double targetSec = static_cast<double>(m_playbackSlider->value()) / 1000.0;
+    m_controller->seek(targetSec);
+    // 暂停中没有新帧驱动进度显示，松开时按落点刷新时间文本；
+    // 进度条已停在落点，onPlayback的暂停过滤会防止其被旧位置回写
+    if (m_state == State::Paused) {
+        m_playbackLabel->setText(QString("%1 / %2").arg(formatTime(targetSec)).arg(m_durationText));
+    }
 }
 
 void MainWindow::onPlayback(int64_t ptsUs)
 {
-    if (!m_isPlaybackSliderPressed) {
-        if (m_playbackSlider->isEnabled()) {
-            m_playbackSlider->setValue(static_cast<int>(ptsUs / 1000));
-        }
-        m_playbackLabel->setText(QString("%1 / %2").arg(formatTime(ptsUs)).arg(m_durationText));
+    if (m_isPlaybackSliderPressed) {
+        return;
     }
+    // 暂停期间音频设备回调仍在运行，上报的是暂停点的旧位置（seek目标只在恢复播放后
+    // 由新段音频帧上报），直接回写会把进度条从seek落点拉回暂停前位置，这里丢弃
+    if (m_state == State::Paused) {
+        return;
+    }
+    if (m_playbackSlider->isEnabled()) {
+        m_playbackSlider->setValue(static_cast<int>(ptsUs / 1000));
+    }
+    m_playbackLabel->setText(QString("%1 / %2").arg(formatTime(ptsUs)).arg(m_durationText));
+}
+
+void MainWindow::onPlaybackFinished()
+{
+    closeVideo();
 }
 
 } // namespace view

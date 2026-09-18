@@ -97,6 +97,11 @@ void QRhiVideoRenderer::stop()
     m_running = false;
 }
 
+void QRhiVideoRenderer::clear()
+{
+    m_currentFrame.reset();
+}
+
 void QRhiVideoRenderer::initialize(QRhiCommandBuffer* cb)
 {
     bool needReinitialize = false;
@@ -148,58 +153,37 @@ void QRhiVideoRenderer::render(QRhiCommandBuffer* cb)
         return;
     }
 
-    if (!m_running) {
-        // 渲染黑屏
-        auto* rub = m_rhi->nextResourceUpdateBatch();
-        cb->beginPass(renderTarget(), QColor(0, 0, 0, 255), QRhiDepthStencilClearValue{1.0f, 0}, rub);
-        cb->endPass();
-        update(); // 保持垂直同步
-        return; // 停止渲染黑屏后直接返回
-    }
-
     if (!m_getFrameCallback) {
-        qWarning() << "No frame callback set.";
-        update(); // 保持垂直同步
+        qCritical() << "GetFrameCallback is not set.";
+        emit errorOccurred("GetFrameCallback is not set.");
         return;
     }
-
-    auto frame = m_getFrameCallback();
-    if (!frame) {
-        // 渲染时机还没到
-        update(); // 保持垂直同步
-        return;
-    }
-
-    if (frame->type() == controller::IFrame::FrameType::End) {
-        // End帧不代表图像，跳过它自身的渲染流程，上一帧画面继续留在屏幕上。
-        // 帧回调由controller保证End帧只投递一次，m_endReached再兜一层防止重复触发
+    controller::FramePtr frame = m_getFrameCallback();
+    
+    bool newFrame = false;
+    if (frame && frame->type() == controller::IFrame::FrameType::End) {
         if (!m_endReached) {
             m_endReached = true;
             qInfo() << "Video playback reached the end of stream.";
             emit playbackFinished();
         }
-        update(); // 保持垂直同步
-        return;
+    } else if (frame) {
+        m_currentFrame = frame;
+        newFrame = true;
     }
 
-    m_currentFrame = frame;
-
-    ShaderResource::Type type = ShaderResource::Type::Yuv;
-    if (m_currentFrame->pixelFormat() != controller::IFrame::PixelFormat::YUV420P) {
-        // 目前只有 YUV420P 格式被支持
-        qWarning() << "Unsupported pixel format.";
-        update(); // 保持垂直同步
-        return;
+    if (newFrame) {
+        renderFrame(cb);
+    } else if (!m_currentFrame) {
+        // 清屏
+        auto* rub = m_rhi->nextResourceUpdateBatch();
+        cb->beginPass(renderTarget(), QColor{0, 0, 0, 255}, QRhiDepthStencilClearValue{1.0f, 0}, rub);
+        cb->endPass();
     }
 
-    if (!createPipeline(type, m_currentFrame)) {
-        qWarning() << "Failed to create pipeline.";
-        emit errorOccurred("Failed to create pipeline.");
-        return;
+    if (m_running) {
+        update();
     }
-
-    renderFrame(cb, m_currentFrame);
-    update(); // 保持垂直同步
 }
 
 void QRhiVideoRenderer::releaseResources()
@@ -278,10 +262,23 @@ bool QRhiVideoRenderer::createPipeline(ShaderResource::Type type, const controll
     return true;
 }
 
-void QRhiVideoRenderer::renderFrame(QRhiCommandBuffer* cb, const controller::FramePtr& frame)
+void QRhiVideoRenderer::renderFrame(QRhiCommandBuffer* cb)
 {
+    ShaderResource::Type shaderType = ShaderResource::Type::Yuv;
+    auto frame = m_currentFrame;
+    if (frame->pixelFormat() == controller::IFrame::PixelFormat::YUV420P) {
+        shaderType = ShaderResource::Type::Yuv;
+    } else {
+        qWarning() << "Unsupported pixel format.";
+        return;
+    }
+
+    if (!createPipeline(shaderType, frame)) {
+        return;
+    }
+    
     QSize renderSize = renderTarget()->pixelSize();
-    QSize frameSize{m_currentFrame->width(), m_currentFrame->height()};
+    QSize frameSize{frame->width(), frame->height()};
     QMatrix4x4 vertexTransformMatrix = createVertexTransformMatrix(frameSize, renderSize);
     QMatrix4x4 colorRangeConversionMatrix = createColorRangeConversionMatrix(frame->colorRange());
     QMatrix4x4 yuvToRGBMatrix = createYUVtoRGBMatrix(frame->colorSpace());

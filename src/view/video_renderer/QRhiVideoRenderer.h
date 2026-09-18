@@ -18,8 +18,11 @@ public:
     ~QRhiVideoRenderer();
 
     void setGetFrameCallback(GetFrameCallback callback);
+    // 开始垂直同步拉取视频帧渲染
     void start();
+    // 停止垂直同步刷新
     void stop();
+    void clear();
 
 signals:
     void errorOccurred(const QString &errorMessage);
@@ -32,7 +35,7 @@ protected:
     void releaseResources() override;
 
     bool createPipeline(ShaderResource::Type type, const controller::FramePtr& frame);
-    void renderFrame(QRhiCommandBuffer* cb, const controller::FramePtr& frame);
+    void renderFrame(QRhiCommandBuffer* cb);
 protected:
     bool m_running{false};
     bool m_endReached{false}; // End帧只投递一次，这里再兜一层，保证playbackFinished不重复触发
