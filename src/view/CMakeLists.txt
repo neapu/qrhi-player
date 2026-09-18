@@ -12,6 +12,18 @@ qt_add_executable(${EXE_NAME}
     MainWindow.cpp
 )
 
+qt_add_resources(${EXE_NAME} "player_icons"
+    PREFIX "/icons"
+    BASE "images"
+    FILES
+        images/pause.svg
+        images/play.svg
+        images/stop.svg
+        images/volume-mute.svg
+        images/volume-down.svg
+        images/volume-up.svg
+)
+
 target_link_libraries(${EXE_NAME} PRIVATE Qt6::Core Qt6::Widgets Qt6::Svg Controller)
 
 include(FetchContent)
