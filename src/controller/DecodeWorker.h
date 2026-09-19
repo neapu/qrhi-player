@@ -45,6 +45,8 @@ public:
 
     // 消费端累计丢弃的帧数，用于统计/调试
     uint64_t droppedFrames() const { return m_droppedFrames.load(std::memory_order_relaxed); }
+    // 解码线程累计解码的帧数，用于统计/调试
+    uint64_t decodedFrames() const { return m_decodedFrames.load(std::memory_order_relaxed); }
 
 protected:
     DecodeWorker();
@@ -86,6 +88,7 @@ protected:
     bool m_controlClock{true};
     // 消费端累计丢帧数，用于统计/调试
     std::atomic_uint64_t m_droppedFrames{0};
+    std::atomic_uint64_t m_decodedFrames{0};
 };
 
 } // namespace controller

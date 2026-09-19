@@ -224,6 +224,7 @@ void DecodeWorker::workerFunc()
                 break;
             }
             m_frameQueue.push_back(std::move(f));
+            m_decodedFrames++;
             m_frameQueueCV.notify_all();
         }
         // 补发End帧

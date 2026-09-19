@@ -78,6 +78,11 @@ MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
         return getVideoFrame();
     });
 
+    m_stats = new view::Stats(this);
+    m_stats->setControllerStatisticsCallback([this] {
+        return m_controller ? m_controller->statistics() : controller::StatisticsData{};
+    });
+
     if (!commandInputFile.isEmpty()) {
         openVideo(commandInputFile);
     }
@@ -136,6 +141,7 @@ void MainWindow::openVideo(const QString &videoFile)
     m_audioEndFlag = false;
 
     m_videoFileName = videoFile;
+    
     setState(State::Playing);
 }
 
@@ -296,6 +302,7 @@ controller::FramePtr MainWindow::getVideoFrame()
                 onPlayback(ptsUs);
             }
         }
+        m_stats->renderFrame();
         return videoFrame;
     }
 
@@ -309,6 +316,7 @@ void MainWindow::setState(State state)
         case State::Playing:
             m_playOrPauseButton->setIcon(m_pauseIcon);
             m_videoRenderer->start();
+            m_stats->start();
             break;
         case State::Paused:
             m_playOrPauseButton->setIcon(m_playIcon);
@@ -318,6 +326,7 @@ void MainWindow::setState(State state)
             m_playOrPauseButton->setIcon(m_playIcon);
             m_videoRenderer->stop();
             m_playbackSlider->setValue(0);
+            m_stats->stop();
             break;
     }
 }

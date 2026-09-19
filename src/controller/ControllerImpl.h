@@ -21,6 +21,7 @@ public:
     virtual void seek(double timepoint) override;
     virtual void pauseOrResume() override;
     virtual bool isPaused() const override;
+    virtual StatisticsData statistics() const override;
 
 private:
     void onPacketRead(controller::PacketPtr&& packet);

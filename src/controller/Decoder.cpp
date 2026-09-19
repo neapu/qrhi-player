@@ -71,8 +71,8 @@ bool Decoder::createContext(const AVStream* stream)
         LOGE("Failed to create codec context");
         return false;
     }
-    // codecpar中的extradata(MP4的SPS/PPS、AAC的ASC)不会随avcodec_open2自动进入上下文，
-    // 缺失时AVCC格式流的每个包都会解码失败；MPEG-TS等在带内传参数集的流不受影响
+    m_codecCtx->thread_count = 0; // 自适应线程数，0表示自动选择
+
     int ret = avcodec_parameters_to_context(m_codecCtx.get(), stream->codecpar);
     if (ret < 0) {
         LOGE("Failed to copy codec parameters to context: " << fh::err2str(ret));

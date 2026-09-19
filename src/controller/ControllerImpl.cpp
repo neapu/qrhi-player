@@ -333,6 +333,16 @@ bool Controller::isPaused() const
     return m_clock.paused;
 }
 
+StatisticsData Controller::statistics() const
+{
+    StatisticsData stats{};
+    if (m_videoWorker) {
+        stats.video.droppedFrames = m_videoWorker->droppedFrames();
+        stats.video.decodedFrames = m_videoWorker->decodedFrames();
+    }
+    return stats;
+}
+
 void Controller::onPacketRead(controller::PacketPtr&& packet)
 {
     if (packet->type() == controller::Packet::PacketType::End) {

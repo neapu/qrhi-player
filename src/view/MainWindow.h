@@ -8,6 +8,7 @@
 #include "video_renderer/QRhiVideoRenderer.h"
 #include "audio_renderer/AudioRenderer.h"
 #include "controller/Controller.h"
+#include "Stats.h"
 
 namespace view {
 class MainWindow : public QMainWindow {
@@ -80,6 +81,7 @@ private:
     bool m_audioEndFlag{false};
 
     QString m_videoFileName{};
+    view::Stats* m_stats{};
 };
 
 } // namespace view

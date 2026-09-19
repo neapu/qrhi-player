@@ -10,6 +10,8 @@ qt_add_executable(${EXE_NAME}
     LogManager.cpp
     MainWindow.h
     MainWindow.cpp
+    Stats.h
+    Stats.cpp
 )
 
 qt_add_resources(${EXE_NAME} "player_icons"

@@ -5,6 +5,7 @@
 #include <functional>
 #include "export.h"
 #include "Frame.h"
+#include "Statistics.h"
 
 namespace controller {
 enum class LogLevel {
@@ -89,6 +90,8 @@ public:
      * @return bool 是否暂停
      */
     virtual bool isPaused() const = 0;
+
+    virtual StatisticsData statistics() const = 0;
 };
 using ControllerPtr = std::unique_ptr<IController>;
 } // controller namespace
