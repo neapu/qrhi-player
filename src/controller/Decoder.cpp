@@ -1,13 +1,33 @@
 #include "Decoder.h"
 #include "ffmpeg_helper/FFmpegError.h"
+#ifdef _WIN32
+#include "DxvaDecoder.h"
+#endif
 
 namespace controller {
-std::unique_ptr<Decoder> Decoder::create(const AVStream* stream, std::shared_ptr<Logger> logger)
+std::unique_ptr<Decoder> Decoder::create(const Params& params)
 {
-    auto decoder = std::unique_ptr<Decoder>(new Decoder());
-    if (!decoder->initialize(stream, logger))
+    std::unique_ptr<Decoder> decoder{nullptr};
+    if (params.type == Type::Dxva) {
+#ifdef _WIN32
+        decoder = std::unique_ptr<Decoder>(new DxvaDecoder(Type::Dxva)); 
+#endif
+    } else {
+        decoder = std::unique_ptr<Decoder>(new Decoder(Type::Software));
+    }
+    if (!decoder) {
+        if (params.logger) params.logger->error() << "Failed to create decoder. type: " << static_cast<int>(params.type);
         return nullptr;
+    }
+    if (!decoder->initialize(params)) {
+        return nullptr;
+    }
     return decoder;
+}
+
+Decoder::Decoder(Type type)
+    : m_type(type)
+{
 }
 
 bool Decoder::sendPacket(controller::PacketPtr&& packet)
@@ -44,19 +64,20 @@ void Decoder::flush()
     }
 }
 
-bool Decoder::initialize(const AVStream* stream, std::shared_ptr<Logger> logger)
+bool Decoder::initialize(const Params& params)
 {
-    if (!logger)
+    if (!params.logger)
         return false;
-    m_logger = logger;
-    if (!createContext(stream)) {
+    m_logger = params.logger;
+    if (!createContext(params.stream)) {
         return false;
     }
-    return openCodec(stream);
+    return openCodec(params.stream);
 }
 
 bool Decoder::createContext(const AVStream* stream)
 {
+    FUNC_TRACE();
     if (!stream) {
         LOGE("Invalid stream");
         return false;
@@ -84,6 +105,7 @@ bool Decoder::createContext(const AVStream* stream)
 
 bool Decoder::openCodec(const AVStream* stream)
 {
+    FUNC_TRACE();
     int ret = avcodec_open2(m_codecCtx.get(), m_codecCtx->codec, nullptr);
     if (ret < 0) {
         LOGE("Failed to open codec: " << fh::err2str(ret));

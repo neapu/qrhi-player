@@ -26,6 +26,16 @@ public:
     struct Params {
         std::string url;
         LogCallback logCallback;
+        bool enableHwDecoder{false};
+#ifdef _WIN32
+        // 裸指针安全声明：只借用，不管理生命周期
+        // void*类型安全声明：必须由调用者保证类型为 ID3D11Device*
+        // 如果不传，会由内部创建 D3D11 设备并初始化硬件解码器上下文
+        void* d3d11Device{nullptr};
+#endif
+        // 如果为true，会将硬件帧转换为软件帧(yuv420p)
+        // 如果为false，则会直接返回硬件帧
+        bool enableHwTransfer{true};
     };
     static CONTROLLER_EXPORT std::unique_ptr<IController> create(const Params& params);
 

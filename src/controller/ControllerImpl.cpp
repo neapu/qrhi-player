@@ -6,6 +6,8 @@
 #include <chrono>
 #include "SwsProcessor.h"
 #include "SwrProcessor.h"
+#include "HWTransferProcessor.h"
+#include "ffmpeg_helper/FFmpegError.h"
 
 namespace {
 int64_t steadyTimeUs()
@@ -105,33 +107,38 @@ bool Controller::initialize()
     constexpr size_t TARGET_VIDEO_QUEUE_DURATION = 10; // 视频缓冲时长(包队列)
     constexpr size_t TARGET_AUDIO_QUEUE_DURATION = 3; // 音频比视频短
 
-    DemuxerWorker::Params demuxerParams;
-    demuxerParams.url = m_params.url;
-    demuxerParams.logger = m_logger;
-    demuxerParams.onPacketRead = [this](controller::PacketPtr&& packet) {
-        onPacketRead(std::move(packet));
-    };
-    demuxerParams.onSeekSucceeded = [this](int serial, int64_t targetUs) {
-        onSeekSucceeded(serial, targetUs);
-    };
-    m_demuxerWorker = DemuxerWorker::create(demuxerParams);
-    if (!m_demuxerWorker) {
-        LOGE("Failed to create DemuxerWorker");
-        return false;
-    }
+    auto demuxer = Demuxer::create(m_params.url, m_logger);
 
-    auto& demuxer = m_demuxerWorker->demuxer();
     for (int i = 0; i < demuxer->streamCount(); ++i) {
         auto* stream = demuxer->stream(i);
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && !m_videoWorker) {
-            SwsProcessor::TargetFormat targetFormat{};
-            targetFormat.format = AV_PIX_FMT_YUV420P;
-            std::shared_ptr<SwsProcessor> swsProcessor = std::make_shared<SwsProcessor>(targetFormat);
+            auto videoDecoder = createVideoDecoder(stream, demuxer);
+            if (!videoDecoder) {
+                LOGE("Failed to create Video Decoder");
+                return false;
+            }
 
             DecodeWorker::Params videoDecodeParams{};
             videoDecodeParams.stream = stream;
             videoDecodeParams.logger = m_logger;
-            videoDecodeParams.frameProcessors.push_back(swsProcessor);
+
+            if (videoDecoder->type() == Decoder::Type::Software) {
+                SwsProcessor::TargetFormat targetFormat{};
+                targetFormat.format = AV_PIX_FMT_YUV420P;
+                std::shared_ptr<SwsProcessor> swsProcessor = std::make_shared<SwsProcessor>(targetFormat, m_logger);
+                videoDecodeParams.frameProcessors.push_back(swsProcessor);
+            } else if (m_params.enableHwTransfer) {
+                std::shared_ptr<HWTransferProcessor> hwTransferProcessor = std::make_shared<HWTransferProcessor>(m_logger);
+                videoDecodeParams.frameProcessors.push_back(hwTransferProcessor);
+                SwsProcessor::TargetFormat targetFormat{};
+                targetFormat.format = AV_PIX_FMT_YUV420P;
+                std::shared_ptr<SwsProcessor> swsProcessor = std::make_shared<SwsProcessor>(targetFormat, m_logger);
+                videoDecodeParams.frameProcessors.push_back(swsProcessor);
+            } else {
+                // 硬件解码并且不转换硬件帧，不需要后处理
+                LOGI("Hardware decoding without hardware frame transfer, no post-processing needed.");
+            }
+
             // 要根据时长计算队列长度
             double fps = av_q2d(stream->avg_frame_rate);
             fps = fps > 0 ? fps : av_q2d(stream->r_frame_rate);
@@ -143,8 +150,8 @@ bool Controller::initialize()
             videoDecodeParams.interrupt = [this]() {
                 return m_demuxerWorker && m_demuxerWorker->seekPending();
             };
-
-            m_videoWorker = DecodeWorker::create(videoDecodeParams);
+            
+            m_videoWorker = DecodeWorker::create(videoDecodeParams, std::move(videoDecoder));
             if (!m_videoWorker) {
                 LOGE("Failed to create Video DecodeWorker");
                 return false;
@@ -152,7 +159,7 @@ bool Controller::initialize()
         } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && !m_audioWorker) {
             SwrProcessor::TargetFormat targetFormat{};
             targetFormat.format = AV_SAMPLE_FMT_S16;
-            std::shared_ptr<SwrProcessor> swrProcessor = std::make_shared<SwrProcessor>(targetFormat);
+            std::shared_ptr<SwrProcessor> swrProcessor = std::make_shared<SwrProcessor>(targetFormat, m_logger);
 
             DecodeWorker::Params audioDecodeParams{};
             audioDecodeParams.stream = stream;
@@ -172,7 +179,12 @@ bool Controller::initialize()
                 return m_demuxerWorker && m_demuxerWorker->seekPending();
             };
 
-            m_audioWorker = DecodeWorker::create(audioDecodeParams);
+            Decoder::Params decoderParams{};
+            decoderParams.type = Decoder::Type::Software;
+            decoderParams.stream = stream;
+            decoderParams.logger = m_logger;
+            auto decoder = Decoder::create(decoderParams);
+            m_audioWorker = DecodeWorker::create(audioDecodeParams, std::move(decoder));
             if (!m_audioWorker) {
                 LOGE("Failed to create Audio DecodeWorker");
                 return false;
@@ -194,7 +206,20 @@ bool Controller::initialize()
         reanchorLocked(0, 1.0);
         m_clock.paused = false;
     }
-    m_demuxerWorker->start();
+    
+    DemuxerWorker::Params demuxerParams;
+    demuxerParams.logger = m_logger;
+    demuxerParams.onPacketRead = [this](controller::PacketPtr&& packet) {
+        onPacketRead(std::move(packet));
+    };
+    demuxerParams.onSeekSucceeded = [this](int serial, int64_t targetUs) {
+        onSeekSucceeded(serial, targetUs);
+    };
+    m_demuxerWorker = DemuxerWorker::create(demuxerParams, std::move(demuxer));
+    if (!m_demuxerWorker) {
+        LOGE("Failed to create DemuxerWorker");
+        return false;
+    }
     
     return true;
 }
@@ -391,6 +416,82 @@ void Controller::reanchorLocked(int64_t mediaUs, double speed)
     m_clock.anchorWallUs = steadyTimeUs();
     m_clock.anchorMediaUs = mediaUs;
     m_clock.speed = speed;
+}
+
+DecoderPtr Controller::createVideoDecoder(const AVStream* stream, DemuxerPtr& demuxer)
+{
+    Decoder::Params decoderParams{};
+    decoderParams.stream = stream;
+    decoderParams.logger = m_logger;
+    decoderParams.type = Decoder::Type::Software;
+#ifdef _WIN32
+    if (m_params.enableHwDecoder) {
+        decoderParams.type = Decoder::Type::Dxva;
+        decoderParams.d3d11Device = m_params.d3d11Device;
+    }
+#endif
+
+    if (decoderParams.type == Decoder::Type::Software) {
+        return Decoder::create(decoderParams);
+    }
+    
+    // 硬件解码器创建失败时需要回退到软件解码
+    auto hwDecoder = Decoder::create(decoderParams);
+    if (!hwDecoder) {
+        decoderParams.type = Decoder::Type::Software;
+        return Decoder::create(decoderParams);
+    }
+
+    // 解码一帧测试，如果失败了，需要回退到软件解码
+    auto ret = testHardwareDecoder(hwDecoder, demuxer, stream->index);
+    if (!demuxer->seek(-1, 0)) { // 回退到流的起始位置
+        LOGW("Failed to seek demuxer to the beginning after hardware decoder test");
+    }
+    if (!ret) {
+        decoderParams.type = Decoder::Type::Software;
+        return Decoder::create(decoderParams);
+    }
+    hwDecoder->flush();
+
+    return hwDecoder;
+}
+
+bool Controller::testHardwareDecoder(DecoderPtr& decoder, DemuxerPtr& demuxer, int streamIndex)
+{
+    for (;;) {
+        auto packet = demuxer->readPacket(0);
+        if (!packet) {
+            LOGW("Failed to read packet for hardware decoder test");
+            return false;
+        }
+        if (packet->type() == Packet::PacketType::End) {
+            LOGW("Reached end of stream during hardware decoder test");
+            return false;
+        }
+        if (packet->streamIndex() != streamIndex) {
+            continue;
+        }
+        bool ret = decoder->sendPacket(std::move(packet));
+        if (!ret) {
+            LOGW("Hardware decoder test failed");
+            return false;
+        }
+        for (;;) {
+            auto frameExp = decoder->receiveFrame(0);
+            if (!frameExp) {
+                int err = frameExp.error();
+                // 如果是EAGAIN或者EOF，继续尝试接收下一帧
+                if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) {
+                    break;
+                }
+                LOGW("Hardware decoder test failed with error: " << fh::err2str(err));
+                return false;
+            }
+            // 成功接收到一帧，说明硬件解码器工作正常
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace controller

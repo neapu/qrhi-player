@@ -5,10 +5,10 @@ namespace controller {
 // 时钟策略为false时，允许放行的阈值
 constexpr int64_t CONTROL_CLOCK_THRESHOLD_US = 200000; // 200ms
 
-std::unique_ptr<DecodeWorker> DecodeWorker::create(const Params& params)
+std::unique_ptr<DecodeWorker> DecodeWorker::create(const Params& params, DecoderPtr&& decoder)
 {
     auto worker = std::unique_ptr<DecodeWorker>(new DecodeWorker());
-    if (worker->initialize(params)) {
+    if (worker->initialize(params, std::move(decoder))) {
         return worker;
     }
     return nullptr;
@@ -23,11 +23,12 @@ DecodeWorker::~DecodeWorker()
     stop();
 }
 
-bool DecodeWorker::initialize(const Params& params)
+bool DecodeWorker::initialize(const Params& params, DecoderPtr&& decoder)
 {
     if (!params.logger) {
         return false;
     }
+    m_decoder = std::move(decoder);
     m_logger = params.logger;
     m_stream = params.stream;
     m_frameProcessors = params.frameProcessors;
@@ -36,16 +37,13 @@ bool DecodeWorker::initialize(const Params& params)
     m_controlClock = params.controlClock;
     m_interrupt = params.interrupt;
 
-    auto tracer = m_logger->trace();
+    FUNC_TRACE();
 
-    // 1.创建解码器
-    m_decoder = Decoder::create(m_stream, m_logger);
     if (!m_decoder) {
-        LOGE("Failed to create decoder");
+        LOGE("Decoder is not provided.");
         return false;
     }
 
-    // 2. 启动解码线程
     m_exitFlag = false;
     m_thread = std::thread(&DecodeWorker::workerFunc, this);
 
@@ -281,12 +279,11 @@ std::unique_ptr<Frame> DecodeWorker::postProcessFrame(std::unique_ptr<Frame>&& f
 
     // 按顺序执行处理链，处理器返回nullptr表示处理失败，丢弃该帧
     if (!m_frameProcessors.empty()) {
-        ProcessorContext context{m_stream, m_logger};
         for (auto& processor : m_frameProcessors) {
             if (!processor) {
                 continue;
             }
-            frame = processor->process(std::move(frame), context);
+            frame = processor->process(std::move(frame));
             if (!frame) {
                 return nullptr;
             }

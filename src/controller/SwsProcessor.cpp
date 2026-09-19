@@ -7,8 +7,8 @@ extern "C" {
 }
 
 namespace controller {
-SwsProcessor::SwsProcessor(const TargetFormat& targetFormat)
-    : m_targetFormat(targetFormat)
+SwsProcessor::SwsProcessor(const TargetFormat& targetFormat, std::shared_ptr<Logger> logger)
+    : m_targetFormat(targetFormat), m_logger(std::move(logger))
 {
     // dynamic 模式，每次转换都由 sws_scale_frame 动态创建转换视图，不用调用 sws_init_context
     m_swsContext = fh::allocateSwsContext();
@@ -17,14 +17,14 @@ SwsProcessor::SwsProcessor(const TargetFormat& targetFormat)
     av_opt_set_int(m_swsContext.get(), "threads", 0, 0);
 }
 
-std::unique_ptr<Frame> SwsProcessor::process(std::unique_ptr<Frame>&& frame, const ProcessorContext& context)
+std::unique_ptr<Frame> SwsProcessor::process(std::unique_ptr<Frame>&& frame)
 {
     if (!frame) return nullptr;
     auto* avFrame = frame->avFrame();
     if (avFrame == nullptr) return nullptr;
 
     if (!m_swsContext) {
-        if (context.logger) context.logger->error() << "Failed to create SwsContext";
+        LOGE("SwsContext is not initialized");
         return nullptr;
     }
 
@@ -42,7 +42,7 @@ std::unique_ptr<Frame> SwsProcessor::process(std::unique_ptr<Frame>&& frame, con
 
     auto dstFrame = Frame::create(frame->serial(), frame->type());
     if (!dstFrame) {
-        if (context.logger) context.logger->error() << "Failed to create destination frame";
+        LOGE("Failed to create destination frame");
         return nullptr;
     }
     auto* dstAVFrame = dstFrame->avFrame();
@@ -52,7 +52,7 @@ std::unique_ptr<Frame> SwsProcessor::process(std::unique_ptr<Frame>&& frame, con
 
     int ret = sws_scale_frame(m_swsContext.get(), dstAVFrame, avFrame);
     if (ret < 0) {
-        if (context.logger) context.logger->error() << "Failed to scale frame: " << fh::err2str(ret);
+        LOGE("Failed to scale frame: " << fh::err2str(ret));
         return nullptr;
     }
     av_frame_copy_props(dstAVFrame, avFrame);

@@ -14,7 +14,23 @@ extern "C" {
 namespace controller {
 class Decoder {
 public:
-    static std::unique_ptr<Decoder> create(const AVStream* stream, std::shared_ptr<Logger> logger);
+    enum class Type {
+        Software,
+        Dxva,
+        // Add other types as needed
+    };
+    struct Params {
+        Type type{Type::Software};
+        // 裸指针安全声明：只借用，不管理生命周期
+        const AVStream* stream{nullptr};
+        std::shared_ptr<Logger> logger{nullptr};
+#ifdef _WIN32
+        // 裸指针安全声明：只借用，不管理生命周期
+        // void*类型安全声明：必须由调用者保证类型为 ID3D11Device*
+        void* d3d11Device{nullptr};
+#endif
+    };
+    static std::unique_ptr<Decoder> create(const Params& params);
 
     virtual ~Decoder() = default;
 
@@ -26,15 +42,18 @@ public:
     // 已打开的解码上下文：输出帧的采样率/声道等以此为准(create成功后有效)
     const AVCodecContext* codecContext() const { return m_codecCtx.get(); }
 
-protected:
-    Decoder() = default;
-    bool initialize(const AVStream* stream, std::shared_ptr<Logger> logger);
-    bool createContext(const AVStream* stream);
-    bool openCodec(const AVStream* stream);
+    Type type() const { return m_type; }
 
 protected:
+    explicit Decoder(Type type);
+    virtual bool initialize(const Params& params);
+    virtual bool createContext(const AVStream* stream);
+    virtual bool openCodec(const AVStream* stream);
+
+protected:
+    Type m_type{Type::Software};
     std::shared_ptr<Logger> m_logger{nullptr};
     fh::CodecContextPtr m_codecCtx{nullptr};
 };
-using DecoderPtr = std::shared_ptr<Decoder>;
+using DecoderPtr = std::unique_ptr<Decoder>;
 } // namespace controller

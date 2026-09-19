@@ -1,18 +1,40 @@
 set(LIB_NAME Controller)
 
-add_library(${LIB_NAME} SHARED
+set(SRC_FILES
+    ControllerImpl.h
     ControllerImpl.cpp
+    FrameImpl.h
     FrameImpl.cpp
+    Decoder.h
     Decoder.cpp
+    Packet.h
     Packet.cpp
+    Logger.h
     Logger.cpp
+    Demuxer.h
     Demuxer.cpp
+    DemuxerWorker.h
     DemuxerWorker.cpp
+    DecodeWorker.h
     DecodeWorker.cpp
+    FrameProcessor.h
     FrameProcessor.cpp
+    SwsProcessor.h
     SwsProcessor.cpp
+    SwrProcessor.h
     SwrProcessor.cpp
+    HWTransferProcessor.h
+    HWTransferProcessor.cpp
 )
+
+if (WIN32)
+    list(APPEND SRC_FILES 
+        DxvaDecoder.h
+        DxvaDecoder.cpp
+    )
+endif()
+
+add_library(${LIB_NAME} SHARED ${SRC_FILES})
 
 target_compile_definitions(${LIB_NAME} PRIVATE CONTROLLER_LIBRARY)
 

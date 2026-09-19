@@ -11,14 +11,13 @@ namespace controller {
 class DemuxerWorker {
 public:
     struct Params {
-        std::string url;
         std::shared_ptr<Logger> logger;
         std::function<void(controller::PacketPtr)> onPacketRead;
         // seek成功(serial递增后)在解封装线程上回调，pts为本次消费的请求目标(AV_TIME_BASE单位)。
         // 目标值随请求携带而非读取共享状态，连续seek时每次回调锚定各自的目标
         std::function<void(int newSerial, int64_t pts)> onSeekSucceeded;
     };
-    static std::unique_ptr<DemuxerWorker> create(const Params& params);
+    static std::unique_ptr<DemuxerWorker> create(const Params& params, DemuxerPtr&& demuxer);
 
     ~DemuxerWorker();
 
@@ -29,14 +28,13 @@ public:
 
     double duration() const;
 
-    // 调用约定：整个生命周期只能调用一次start()，stop()用于停止线程，停止后不能再启动
-    void start();
+    // 调用约定：整个生命周期只能调用一次stop()用于停止线程，停止后不能再启动
     void stop();
 
     std::unique_ptr<Demuxer>& demuxer() { return m_demuxer; }
 private:
     DemuxerWorker() = default;
-    bool initialize(const Params& params);
+    bool initialize(const Params& params, DemuxerPtr&& demuxer);
 
     void workerFunc();
 

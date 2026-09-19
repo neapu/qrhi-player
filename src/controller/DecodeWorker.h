@@ -25,7 +25,7 @@ public:
         // 同时作为包队列满时阻塞等待的唤醒条件，避免解封装线程被旧数据卡住延迟消费seek请求
         std::function<bool()> interrupt;
     };
-    static std::unique_ptr<DecodeWorker> create(const Params& params);
+    static std::unique_ptr<DecodeWorker> create(const Params& params, DecoderPtr&& decoder);
 
     virtual ~DecodeWorker();
 
@@ -51,7 +51,7 @@ public:
 protected:
     DecodeWorker();
     
-    virtual bool initialize(const Params& params);
+    virtual bool initialize(const Params& params, DecoderPtr&& decoder);
 
     void workerFunc();
 

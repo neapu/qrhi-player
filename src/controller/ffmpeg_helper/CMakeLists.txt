@@ -15,6 +15,8 @@ add_library(${LIB_NAME} STATIC
     SwsContext.cpp
     SwrContext.h
     SwrContext.cpp
+    BufferRef.h
+    BufferRef.cpp
 )
 
 if (WIN32)

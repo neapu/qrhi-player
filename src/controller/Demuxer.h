@@ -26,5 +26,6 @@ private:
     std::shared_ptr<Logger> m_logger{nullptr};
     fh::InputContextPtr m_inputContext{nullptr};
 };
+using DemuxerPtr = std::unique_ptr<Demuxer>;
 
 } // namespace controller

@@ -11,12 +11,13 @@ public:
         int width{0};  // 填0表示保持原宽
         int height{0}; // 填0表示保持原高
     };
-    SwsProcessor(const TargetFormat& targetFormat);
+    SwsProcessor(const TargetFormat& targetFormat, std::shared_ptr<Logger> logger);
     ~SwsProcessor() override = default;
 
-    std::unique_ptr<Frame> process(std::unique_ptr<Frame>&& frame, const ProcessorContext& context) override;
+    std::unique_ptr<Frame> process(std::unique_ptr<Frame>&& frame) override;
 
 private:
+    std::shared_ptr<Logger> m_logger;
     TargetFormat m_targetFormat;
     fh::SwsContextPtr m_swsContext{nullptr};
 };

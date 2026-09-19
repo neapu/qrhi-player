@@ -11,12 +11,13 @@ public:
         int sampleRate{0};           // 填0表示保持原采样率
         AVChannelLayout chLayout{};  // nb_channels为0表示保持原声道布局
     };
-    SwrProcessor(const TargetFormat& targetFormat);
+    SwrProcessor(const TargetFormat& targetFormat, std::shared_ptr<Logger> logger);
     ~SwrProcessor() override = default;
 
-    std::unique_ptr<Frame> process(std::unique_ptr<Frame>&& frame, const ProcessorContext& context) override;
+    std::unique_ptr<Frame> process(std::unique_ptr<Frame>&& frame) override;
 
 private:
+    std::shared_ptr<Logger> m_logger;
     TargetFormat m_targetFormat;
     fh::SwrContextPtr m_swrContext{nullptr};
     AVSampleFormat m_srcFormat{AV_SAMPLE_FMT_NONE};

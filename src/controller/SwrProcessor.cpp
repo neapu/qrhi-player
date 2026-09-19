@@ -2,12 +2,12 @@
 #include "ffmpeg_helper/FFmpegError.h"
 
 namespace controller {
-SwrProcessor::SwrProcessor(const TargetFormat& targetFormat)
-    : m_targetFormat(targetFormat)
+SwrProcessor::SwrProcessor(const TargetFormat& targetFormat, std::shared_ptr<Logger> logger)
+    : m_targetFormat(targetFormat), m_logger(std::move(logger))
 {
 }
 
-std::unique_ptr<Frame> SwrProcessor::process(std::unique_ptr<Frame>&& frame, const ProcessorContext& context)
+std::unique_ptr<Frame> SwrProcessor::process(std::unique_ptr<Frame>&& frame)
 {
     if (!frame) return nullptr;
     auto* avFrame = frame->avFrame();
@@ -35,7 +35,7 @@ std::unique_ptr<Frame> SwrProcessor::process(std::unique_ptr<Frame>&& frame, con
         m_swrContext = fh::createSwrContext(&targetLayout, targetFormat, targetSampleRate,
                                             &avFrame->ch_layout, static_cast<AVSampleFormat>(avFrame->format), avFrame->sample_rate);
         if (!m_swrContext) {
-            if (context.logger) context.logger->error() << "Failed to create SwrContext";
+            LOGE("Failed to create SwrContext");
             return nullptr;
         }
         m_srcFormat = static_cast<AVSampleFormat>(avFrame->format);
@@ -45,7 +45,7 @@ std::unique_ptr<Frame> SwrProcessor::process(std::unique_ptr<Frame>&& frame, con
 
     auto dstFrame = Frame::create(frame->serial(), frame->type());
     if (!dstFrame) {
-        if (context.logger) context.logger->error() << "Failed to create destination frame";
+        LOGE("Failed to create destination frame");
         return nullptr;
     }
     auto* dstAVFrame = dstFrame->avFrame();
@@ -56,7 +56,7 @@ std::unique_ptr<Frame> SwrProcessor::process(std::unique_ptr<Frame>&& frame, con
 
     int ret = swr_convert_frame(m_swrContext.get(), dstAVFrame, avFrame);
     if (ret < 0) {
-        if (context.logger) context.logger->error() << "Failed to convert frame: " << fh::err2str(ret);
+        LOGE("Failed to convert frame: " << fh::err2str(ret));
         return nullptr;
     }
     // pts直接沿用输入帧的数值，未补偿重采样延迟（首帧会有轻微提前）

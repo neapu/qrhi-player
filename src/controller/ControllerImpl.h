@@ -29,6 +29,8 @@ private:
     void onSeekSucceeded(int serial, int64_t targetUs);
     int64_t clockUsLocked() const; // 读取当前媒体时间(us)，调用方需持有m_clock.mutex
     void reanchorLocked(int64_t mediaUs, double speed); // 重新锚定时钟并设置速率，调用方需持有m_clock.mutex
+    DecoderPtr createVideoDecoder(const AVStream* stream, DemuxerPtr& demuxer);
+    bool testHardwareDecoder(DecoderPtr& decoder, DemuxerPtr& demuxer, int streamIndex);
 
 private:
     Params m_params;

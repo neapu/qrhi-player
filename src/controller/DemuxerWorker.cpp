@@ -1,10 +1,10 @@
 #include "DemuxerWorker.h"
 
 namespace controller {
-std::unique_ptr<DemuxerWorker> DemuxerWorker::create(const Params& params)
+std::unique_ptr<DemuxerWorker> DemuxerWorker::create(const Params& params, DemuxerPtr&& demuxer)
 {
     auto worker = std::unique_ptr<DemuxerWorker>(new DemuxerWorker());
-    if (!worker->initialize(params)) {
+    if (!worker->initialize(params, std::move(demuxer))) {
         return nullptr;
     }
     return worker;
@@ -13,12 +13,6 @@ std::unique_ptr<DemuxerWorker> DemuxerWorker::create(const Params& params)
 DemuxerWorker::~DemuxerWorker()
 {
     stop();
-}
-
-void DemuxerWorker::start()
-{
-    m_exitFlag = false;
-    m_thread = std::thread(&DemuxerWorker::workerFunc, this);
 }
 
 void DemuxerWorker::stop()
@@ -53,21 +47,24 @@ void DemuxerWorker::seek(int streamIndex, int64_t pts)
     m_seekCV.notify_all();
 }
 
-bool DemuxerWorker::initialize(const Params& params)
+bool DemuxerWorker::initialize(const Params& params, DemuxerPtr&& demuxer)
 {
     if (!params.logger || !params.onPacketRead) {
         return false;
     }
     m_logger = params.logger;
-    auto tracer = m_logger->trace();
+    FUNC_TRACE();
 
     m_onPacketRead = params.onPacketRead;
     m_onSeekSucceeded = params.onSeekSucceeded;
-    m_demuxer = Demuxer::create(params.url, params.logger);
+    m_demuxer = std::move(demuxer);
     if (!m_demuxer) {
         LOGE("Failed to create Demuxer");
         return false;
     }
+
+    m_exitFlag = false;
+    m_thread = std::thread(&DemuxerWorker::workerFunc, this);
     
     return true;
 }
