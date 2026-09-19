@@ -1,6 +1,11 @@
 #include "SwsProcessor.h"
 #include "ffmpeg_helper/FFmpegError.h"
 
+extern "C" {
+#include <libswscale/swscale.h>
+#include <libavutil/opt.h>
+}
+
 namespace controller {
 SwsProcessor::SwsProcessor(const TargetFormat& targetFormat)
     : m_targetFormat(targetFormat)
@@ -8,6 +13,8 @@ SwsProcessor::SwsProcessor(const TargetFormat& targetFormat)
     // dynamic 模式，每次转换都由 sws_scale_frame 动态创建转换视图，不用调用 sws_init_context
     m_swsContext = fh::allocateSwsContext();
     m_swsContext->flags = SWS_BILINEAR;
+    // 启用多线程
+    av_opt_set_int(m_swsContext.get(), "threads", 0, 0);
 }
 
 std::unique_ptr<Frame> SwsProcessor::process(std::unique_ptr<Frame>&& frame, const ProcessorContext& context)
