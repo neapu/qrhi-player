@@ -47,6 +47,7 @@ private slots:
     void onPlaybackSliderReleased();
     void onPlayback(int64_t ptsUs);
     void onPlaybackFinished();
+    void onVideoRendererInitialized();
 
 private:
     view::QRhiVideoRenderer* m_videoRenderer{};
@@ -82,6 +83,8 @@ private:
 
     QString m_videoFileName{};
     view::Stats* m_stats{};
+
+    QString m_commandInputFile{};
 };
 
 } // namespace view

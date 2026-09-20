@@ -12,6 +12,10 @@ SwsProcessor::SwsProcessor(const TargetFormat& targetFormat, std::shared_ptr<Log
 {
     // dynamic 模式，每次转换都由 sws_scale_frame 动态创建转换视图，不用调用 sws_init_context
     m_swsContext = fh::allocateSwsContext();
+    if (!m_swsContext) {
+        LOGE("Failed to allocate SwsContext");
+        return;
+    }
     m_swsContext->flags = SWS_BILINEAR;
     // 启用多线程
     av_opt_set_int(m_swsContext.get(), "threads", 0, 0);

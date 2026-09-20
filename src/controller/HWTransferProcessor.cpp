@@ -17,6 +17,10 @@ std::unique_ptr<Frame> HWTransferProcessor::process(std::unique_ptr<Frame>&& fra
         return std::move(frame);
     }
     auto swFrame = Frame::create(frame->serial(), frame->type());
+    if (!swFrame) {
+        LOGE("Failed to create software frame");
+        return nullptr;
+    }
     int ret = av_hwframe_transfer_data(swFrame->avFrame(), frame->avFrame(), 0);
     if (ret < 0) {
         LOGE("Failed to transfer hardware frame data: " << fh::err2str(ret));

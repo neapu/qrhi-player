@@ -64,6 +64,16 @@ void Decoder::flush()
     }
 }
 
+int Decoder::width() const
+{
+    return m_codecCtx ? m_codecCtx->width : 0;
+}
+
+int Decoder::height() const
+{
+    return m_codecCtx ? m_codecCtx->height : 0;
+}
+
 bool Decoder::initialize(const Params& params)
 {
     if (!params.logger)

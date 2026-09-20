@@ -6,6 +6,8 @@ namespace controller {
 class Frame final : public controller::IFrame {
 public:
     static std::unique_ptr<Frame> create(int serial, FrameType type = FrameType::Normal);
+    static AVPixelFormat toAvPixelFormat(PixelFormat pixelFormat);
+    static PixelFormat toPixelFormat(AVPixelFormat avPixelFormat);
 
     Frame(int serial, FrameType type = FrameType::Normal, fh::FramePtr&& frame = nullptr);
 
@@ -30,6 +32,11 @@ public:
     int yLineSize() const override;
     int uLineSize() const override;
     int vLineSize() const override;
+
+#ifdef _WIN32
+    void* d3d11Texture2D() const override;
+    int subresourceIndex() const override;
+#endif
 
     SampleFormat sampleFormat() const override;
     int sampleRate() const override;

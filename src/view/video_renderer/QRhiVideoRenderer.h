@@ -24,7 +24,12 @@ public:
     void stop();
     void clear();
 
+#ifdef _WIN32
+    void* d3d11Device() const { return m_d3d11Device; }
+#endif
+
 signals:
+    void initialized();
     void errorOccurred(const QString &errorMessage);
     // 拉取到End帧（播放到流结尾）时触发，每次start()后最多触发一次
     void playbackFinished();
@@ -47,6 +52,11 @@ protected:
     std::unique_ptr<ShaderResource> m_shaderResource{nullptr};
 
     controller::FramePtr m_currentFrame{nullptr};
+
+#ifdef _WIN32
+    void* m_d3d11Device{nullptr};
+    void* m_d3d11DeviceContext{nullptr};
+#endif
 };
 
 } // namespace view

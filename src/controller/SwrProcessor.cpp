@@ -40,7 +40,7 @@ std::unique_ptr<Frame> SwrProcessor::process(std::unique_ptr<Frame>&& frame)
         }
         m_srcFormat = static_cast<AVSampleFormat>(avFrame->format);
         m_srcSampleRate = avFrame->sample_rate;
-        m_srcChLayout = avFrame->ch_layout;
+        av_channel_layout_copy(&m_srcChLayout, &avFrame->ch_layout);
     }
 
     auto dstFrame = Frame::create(frame->serial(), frame->type());

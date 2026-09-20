@@ -1,6 +1,9 @@
 #include "ShaderResource.h"
 #include "YuvShaderResource.h"
 #include <QDebug>
+#ifdef _WIN32
+#include "D3D11ShaderResource.h"
+#endif
 
 namespace view {
 void ShaderResource::updateVertexTransformMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix)
@@ -9,7 +12,7 @@ void ShaderResource::updateVertexTransformMatrix(QRhiResourceUpdateBatch* rub, c
         qCritical() << "vertex transform matrix buffer is not ready";
         return;
     }
-    rub->updateDynamicBuffer(m_vsVertexTransformMatrix.get(), 0, sizeof(float)*4*4, matrix.constData());
+    rub->updateDynamicBuffer(m_vsVertexTransformMatrix.get(), 0, sizeof(float) * 4 * 4, matrix.constData());
 }
 
 void ShaderResource::updateColorRangeConversionMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix)
@@ -18,7 +21,7 @@ void ShaderResource::updateColorRangeConversionMatrix(QRhiResourceUpdateBatch* r
         qCritical() << "color range conversion matrix buffer is not ready";
         return;
     }
-    rub->updateDynamicBuffer(m_fsColorRangeConversionMatrix.get(), 0, sizeof(float)*4*4, matrix.constData());
+    rub->updateDynamicBuffer(m_fsColorRangeConversionMatrix.get(), 0, sizeof(float) * 4 * 4, matrix.constData());
 }
 
 void ShaderResource::updateYUVtoRGBMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix)
@@ -27,16 +30,20 @@ void ShaderResource::updateYUVtoRGBMatrix(QRhiResourceUpdateBatch* rub, const QM
         qCritical() << "YUV to RGB matrix buffer is not ready";
         return;
     }
-    rub->updateDynamicBuffer(m_fsYUVtoRGBMatrix.get(), 0, sizeof(float)*4*4, matrix.constData());
+    rub->updateDynamicBuffer(m_fsYUVtoRGBMatrix.get(), 0, sizeof(float) * 4 * 4, matrix.constData());
 }
 
-bool ShaderResource::initialize(const Params& params)
+ShaderResource::ShaderResource(const Params& params)
+    : m_type(params.type), m_rhi(params.rhi), m_size(params.size), m_swPixelFormat(params.swPixelFormat)
 {
-    if (params.rhi == nullptr) {
+}
+
+bool ShaderResource::initialize()
+{
+    if (m_rhi == nullptr) {
         qCritical() << "called with null QRhi";
         return false;
     }
-    m_rhi = params.rhi;
 
     // 公共 buffer 必须先于派生类资源创建：派生类在 initializeResources()
     // 里建 SRB 时会直接引用它们
@@ -44,7 +51,7 @@ bool ShaderResource::initialize(const Params& params)
         return false;
     }
 
-    return initializeResources(params);
+    return initializeResources();
 }
 
 bool ShaderResource::createMatrixBuffers()
@@ -55,17 +62,19 @@ bool ShaderResource::createMatrixBuffers()
         return false;
     }
 
-    m_vsVertexTransformMatrix.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(float)*4*4));
+    m_vsVertexTransformMatrix.reset(
+        rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(float) * 4 * 4));
     if (!m_vsVertexTransformMatrix->create()) {
         qCritical() << "Failed to create vertex uniform buffer";
         return false;
     }
-    m_fsColorRangeConversionMatrix.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(float)*4*4));
+    m_fsColorRangeConversionMatrix.reset(
+        rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(float) * 4 * 4));
     if (!m_fsColorRangeConversionMatrix->create()) {
         qCritical() << "Failed to create fragment color buffer";
         return false;
     }
-    m_fsYUVtoRGBMatrix.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(float)*4*4));
+    m_fsYUVtoRGBMatrix.reset(rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(float) * 4 * 4));
     if (!m_fsYUVtoRGBMatrix->create()) {
         qCritical() << "Failed to create fragment YUV range buffer";
         return false;
@@ -76,14 +85,21 @@ bool ShaderResource::createMatrixBuffers()
 std::unique_ptr<ShaderResource> ShaderResource::create(const Params& params)
 {
     switch (params.type) {
-    case Type::Yuv:
-        {
-            std::unique_ptr<ShaderResource> res = std::make_unique<YuvShaderResource>();
-            if (res->initialize(params)) {
+        case Type::Yuv: {
+            std::unique_ptr<ShaderResource> res = std::make_unique<YuvShaderResource>(params);
+            if (res->initialize()) {
                 return res;
             }
-        }
-        break;
+        } break;
+#ifdef _WIN32
+        case Type::D3D11: {
+            std::unique_ptr<ShaderResource> res = std::make_unique<D3D11ShaderResource>(params);
+            if (res->initialize()) {
+                return res;
+            }
+        } break;
+#endif
+        default: qWarning() << "Unsupported shader resource type."; break;
     }
     return nullptr;
 }

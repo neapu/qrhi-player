@@ -24,6 +24,7 @@ qt_add_shaders(${LIB_NAME} "shaders"
     FILES
     shaders/video.vert
     shaders/yuv420p.frag
+    shaders/nv12.frag
 )
 
 if(Qt6_VERSION VERSION_GREATER_EQUAL "6.9")

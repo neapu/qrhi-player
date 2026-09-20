@@ -92,6 +92,16 @@ std::unique_ptr<Frame> Frame::create(int serial, FrameType type)
     return std::make_unique<Frame>(serial, type, std::move(framePtr));
 }
 
+AVPixelFormat Frame::toAvPixelFormat(PixelFormat pixelFormat)
+{
+    return ::toAVPixelFormat(pixelFormat);
+}
+
+controller::Frame::PixelFormat Frame::toPixelFormat(AVPixelFormat avPixelFormat)
+{
+    return ::toPixelFormat(avPixelFormat);
+}
+
 Frame::Frame(int serial, FrameType type, fh::FramePtr&& frame)
     : m_serial(serial), m_type(type), m_frame(std::move(frame))
 {
@@ -163,6 +173,26 @@ int Frame::vLineSize() const
 {
     return m_frame ? m_frame->linesize[2] : 0;
 }
+
+#ifdef _WIN32
+void* Frame::d3d11Texture2D() const
+{
+    if (!m_frame) return nullptr;
+    if (static_cast<AVPixelFormat>(m_frame->format) != AV_PIX_FMT_D3D11) {
+        return nullptr;
+    }
+    return m_frame->data[0];
+}
+
+int Frame::subresourceIndex() const
+{
+    if (!m_frame) return 0;
+    if (static_cast<AVPixelFormat>(m_frame->format) != AV_PIX_FMT_D3D11) {
+        return 0;
+    }
+    return static_cast<int>(reinterpret_cast<uintptr_t>(m_frame->data[1]));
+}
+#endif
 
 Frame::SampleFormat Frame::sampleFormat() const
 {

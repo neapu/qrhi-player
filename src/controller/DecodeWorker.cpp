@@ -69,6 +69,7 @@ void DecodeWorker::sendPacket(PacketPtr&& packet)
     auto serial = packet->serial();
     if (serial != m_serial.load()) {
         // 序列号不一样，说明发生了seek，清空包队列
+        m_serial.store(serial);
         {
             std::lock_guard<std::mutex> lock(m_packetQueueMutex);
             m_packetQueue.clear();
@@ -79,7 +80,6 @@ void DecodeWorker::sendPacket(PacketPtr&& packet)
             std::lock_guard<std::mutex> lock(m_frameQueueMutex);
             m_frameQueueCV.notify_all();
         }
-        m_serial.store(serial);
     }
 
     std::unique_lock<std::mutex> lock(m_packetQueueMutex);

@@ -31,6 +31,7 @@ private:
     void reanchorLocked(int64_t mediaUs, double speed); // 重新锚定时钟并设置速率，调用方需持有m_clock.mutex
     DecoderPtr createVideoDecoder(const AVStream* stream, DemuxerPtr& demuxer);
     bool testHardwareDecoder(DecoderPtr& decoder, DemuxerPtr& demuxer, int streamIndex);
+    std::optional<FrameProcessorList> makeFrameProcessors(const AVStream* stream, DecoderPtr& decoder);
 
 private:
     Params m_params;

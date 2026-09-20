@@ -15,7 +15,7 @@ public:
     struct Params {
         const AVStream* stream{nullptr};
         std::shared_ptr<Logger> logger{nullptr};
-        std::vector<std::shared_ptr<FrameProcessor>> frameProcessors;
+        FrameProcessorList frameProcessors;
         size_t maxPacketQueueDepth{100};
         // 允许丢帧(视频)：出队侧按主时钟丢弃被新帧覆盖的到期帧
         bool canDropFrames{false};
@@ -62,7 +62,7 @@ protected:
 protected:
     std::shared_ptr<Logger> m_logger{nullptr};
     const AVStream* m_stream{nullptr};
-    std::vector<std::shared_ptr<FrameProcessor>> m_frameProcessors;
+    FrameProcessorList m_frameProcessors;
     std::function<bool()> m_interrupt;
 
     std::deque<PacketPtr> m_packetQueue;

@@ -1,6 +1,10 @@
 #include "QRhiVideoRenderer.h"
 #include <QFile>
 #include <QDebug>
+#ifdef _WIN32
+#include <d3d11.h>
+#include <wrl/client.h>
+#endif
 
 namespace {
 QShader loadShader(const QString& path)
@@ -11,6 +15,20 @@ QShader loadShader(const QString& path)
         return {};
     }
     return QShader::fromSerialized(file.readAll());
+}
+
+QString pixelFormatToShaderName(controller::IFrame::PixelFormat pixelFormat)
+{
+    switch (pixelFormat) {
+        case controller::IFrame::PixelFormat::YUV420P:
+        case controller::IFrame::PixelFormat::YUV420P10LE:
+            return ":/shaders/yuv420p.frag.qsb";
+        case controller::IFrame::PixelFormat::NV12:
+        case controller::IFrame::PixelFormat::P010LE:
+            return ":/shaders/nv12.frag.qsb";
+        default:
+            return "";
+    }
 }
 
 // 创建顶点变换矩阵，负责保持宽高比
@@ -100,6 +118,8 @@ void QRhiVideoRenderer::stop()
 void QRhiVideoRenderer::clear()
 {
     m_currentFrame.reset();
+    m_pipeline.reset();
+    m_shaderResource.reset();
 }
 
 void QRhiVideoRenderer::initialize(QRhiCommandBuffer* cb)
@@ -121,6 +141,30 @@ void QRhiVideoRenderer::initialize(QRhiCommandBuffer* cb)
 
     qInfo() << "Initializing QRhiVideoRenderer with new QRhi instance.";
     qInfo() << "Using QRhi backend:" << m_rhi->backendName();
+
+#ifdef _WIN32
+    if (m_rhi->backend() == QRhi::D3D11) {
+        auto* nativeHandle = reinterpret_cast<const QRhiD3D11NativeHandles*>(m_rhi->nativeHandles());
+        if (!nativeHandle) {
+            qCritical() << "Failed to obtain D3D11 native handles.";
+            emit errorOccurred("Failed to obtain D3D11 native handles.");
+            return;
+        }
+        auto* device = static_cast<ID3D11Device*>(nativeHandle->dev);
+        auto* context = static_cast<ID3D11DeviceContext*>(nativeHandle->context);
+        
+        // 启用多线程支持
+        Microsoft::WRL::ComPtr<ID3D10Multithread> mt;
+        if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&mt)))) {
+            mt->SetMultithreadProtected(TRUE);
+            m_d3d11Device = device;
+            m_d3d11DeviceContext = context;
+        } else {
+            // 回退到渲染软件帧模式，不赋值m_d3d11Device和m_d3d11DeviceContext
+            qWarning() << "Failed to enable multithread protection for D3D11 device. Falling back to software rendering mode.";
+        }
+    }
+#endif
 
     // 纹理坐标原点在左上角，而QRhi的默认坐标原点在左下角，所以需要翻转v坐标
     const float vertexData[] = {
@@ -145,6 +189,7 @@ void QRhiVideoRenderer::initialize(QRhiCommandBuffer* cb)
     cb->resourceUpdate(rub);
 
     qInfo() << "QRhiVideoRenderer initialized.";
+    emit initialized();
 }
 
 void QRhiVideoRenderer::render(QRhiCommandBuffer* cb)
@@ -192,6 +237,10 @@ void QRhiVideoRenderer::releaseResources()
     m_pipeline.reset();
     m_shaderResource.reset();
     m_rhi = nullptr;
+#ifdef _WIN32
+    m_d3d11Device = nullptr;
+    m_d3d11DeviceContext = nullptr;
+#endif
     QRhiWidget::releaseResources();
 }
 
@@ -201,6 +250,8 @@ bool QRhiVideoRenderer::createPipeline(ShaderResource::Type type, const controll
     if (m_pipeline 
         && m_shaderResource
         && m_shaderResource->size() == frameSize
+        && m_shaderResource->type() == type
+        && m_shaderResource->swPixelFormat() == frame->swPixelFormat()
         && m_pipeline->renderPassDescriptor() == renderTarget()->renderPassDescriptor()
     ) {
         return true;
@@ -208,20 +259,32 @@ bool QRhiVideoRenderer::createPipeline(ShaderResource::Type type, const controll
     
     qInfo() << "Creating pipeline for frame size:" << frameSize;
 
+#ifdef _WIN32
+    if (type == ShaderResource::Type::D3D11 && (!m_d3d11Device || !m_d3d11DeviceContext)) {
+        qWarning() << "D3D11 device or context is not available.";
+        return false;
+    }
+#endif
+
     m_pipeline.reset();
 
-    m_shaderResource = ShaderResource::create({
-        type,
-        m_rhi,
-        frameSize,
-    });
+    ShaderResource::Params params;
+    params.type = type;
+    params.rhi = m_rhi;
+    params.size = frameSize;
+#ifdef _WIN32
+    params.d3d11Device = m_d3d11Device;
+    params.d3d11DeviceContext = m_d3d11DeviceContext;
+#endif
+    params.swPixelFormat = frame->swPixelFormat();
+    m_shaderResource = ShaderResource::create(params);
     if (!m_shaderResource) {
         qWarning() << "Failed to create shader resource.";
         return false;
     }
 
     auto vertexShader = loadShader(":/shaders/video.vert.qsb");
-    auto fragmentShader = loadShader(":/shaders/yuv420p.frag.qsb");
+    auto fragmentShader = loadShader(pixelFormatToShaderName(frame->swPixelFormat()));
     if (!vertexShader.isValid() || !fragmentShader.isValid()) {
         qWarning() << "Failed to load shaders.";
         m_shaderResource.reset();
@@ -266,8 +329,14 @@ void QRhiVideoRenderer::renderFrame(QRhiCommandBuffer* cb)
 {
     ShaderResource::Type shaderType = ShaderResource::Type::Yuv;
     auto frame = m_currentFrame;
-    if (frame->pixelFormat() == controller::IFrame::PixelFormat::YUV420P) {
+    if (frame->pixelFormat() == controller::IFrame::PixelFormat::YUV420P
+        || frame->pixelFormat() == controller::IFrame::PixelFormat::NV12
+        || frame->pixelFormat() == controller::IFrame::PixelFormat::YUV420P10LE
+        || frame->pixelFormat() == controller::IFrame::PixelFormat::P010LE
+    ) {
         shaderType = ShaderResource::Type::Yuv;
+    } else if (frame->pixelFormat() == controller::IFrame::PixelFormat::D3D11) {
+        shaderType = ShaderResource::Type::D3D11;
     } else {
         qWarning() << "Unsupported pixel format.";
         return;

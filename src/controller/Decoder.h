@@ -44,6 +44,9 @@ public:
 
     Type type() const { return m_type; }
 
+    int width() const;
+    int height() const;
+
 protected:
     explicit Decoder(Type type);
     virtual bool initialize(const Params& params);

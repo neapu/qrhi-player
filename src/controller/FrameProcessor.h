@@ -11,4 +11,5 @@ public:
     virtual std::unique_ptr<Frame> process(std::unique_ptr<Frame>&& frame) = 0;
     virtual void flush() {};
 };
+using FrameProcessorList = std::vector<std::shared_ptr<FrameProcessor>>;
 } // namespace controller

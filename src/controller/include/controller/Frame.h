@@ -31,13 +31,13 @@ public:
 
     // ============= 视频相关 =============
     enum class PixelFormat {
-        None,
+        None = 0,
         YUV420P,
         YUV420P10LE,
         NV12,
         P010LE,
 
-        D3D11,
+        D3D11 = 0x1000,
     };
     enum class ColorSpace {
         BT601, // 其他全部退化到BT601
@@ -86,6 +86,7 @@ public:
     virtual uint8_t* yData() const = 0;
     virtual uint8_t* uData() const = 0;
     virtual uint8_t* vData() const = 0;
+    virtual uint8_t* uvData() const { return uData(); }
     
     /**
      * @brief 获取对应平面的行大小，仅适用于YUV420P，相当于AVFrame中的linesize[0/1/2]字段
@@ -94,6 +95,12 @@ public:
     virtual int yLineSize() const = 0;
     virtual int uLineSize() const = 0;
     virtual int vLineSize() const = 0;
+    virtual int uvLineSize() const { return uLineSize(); }
+
+#ifdef _WIN32
+    virtual void* d3d11Texture2D() const = 0;
+    virtual int subresourceIndex() const = 0;
+#endif
 
     // ============= 音频相关 =============
     enum class SampleFormat {

@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <functional>
+#include <vector>
 #include "export.h"
 #include "Frame.h"
 #include "Statistics.h"
@@ -33,9 +34,8 @@ public:
         // 如果不传，会由内部创建 D3D11 设备并初始化硬件解码器上下文
         void* d3d11Device{nullptr};
 #endif
-        // 如果为true，会将硬件帧转换为软件帧(yuv420p)
-        // 如果为false，则会直接返回硬件帧
-        bool enableHwTransfer{true};
+        // 请求的帧格式列表，表示渲染器可以解析的帧格式
+        std::vector<IFrame::PixelFormat> requirePixelFormats;
     };
     static CONTROLLER_EXPORT std::unique_ptr<IController> create(const Params& params);
 

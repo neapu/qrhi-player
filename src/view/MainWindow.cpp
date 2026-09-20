@@ -51,6 +51,7 @@ QString formatTime(int64_t ptsUs)
 namespace view {
 MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
     : QMainWindow(parent)
+    , m_commandInputFile(commandInputFile)
 {
     qInfo() << "MainWindow created";
     
@@ -73,6 +74,7 @@ MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
             onPlaybackFinished();
         }
     });
+    connect(m_videoRenderer, &view::QRhiVideoRenderer::initialized, this, &MainWindow::onVideoRendererInitialized);
 
     m_videoRenderer->setGetFrameCallback([this]() {
         return getVideoFrame();
@@ -82,10 +84,6 @@ MainWindow::MainWindow(const QString &commandInputFile, QWidget* parent)
     m_stats->setControllerStatisticsCallback([this] {
         return m_controller ? m_controller->statistics() : controller::StatisticsData{};
     });
-
-    if (!commandInputFile.isEmpty()) {
-        openVideo(commandInputFile);
-    }
 }
 
 MainWindow::~MainWindow()
@@ -101,6 +99,24 @@ void MainWindow::openVideo(const QString &videoFile)
     params.logCallback = [](controller::LogLevel level, const std::string& fileName, int line, const std::string& message) {
         LogManager::instance().logControllerMessage(level, fileName, line, message);
     };
+    params.enableHwDecoder = true; // 不支持时会自动回退到软件解码
+#ifdef _WIN32
+    auto* d3d11Device = m_videoRenderer->d3d11Device();
+    if (d3d11Device) {
+        params.d3d11Device = d3d11Device;
+        params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::D3D11);
+    } else {
+        params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::YUV420P);
+        params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::NV12);
+        params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::YUV420P10LE);
+        params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::P010LE);
+    }
+#else
+    params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::YUV420P);
+    params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::NV12);
+    params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::YUV420P10LE);
+    params.requirePixelFormats.push_back(controller::IFrame::PixelFormat::P010LE);
+#endif
     m_controller = controller::IController::create(params);
     if (!m_controller) {
         qCritical() << "Failed to create controller for video file:" << videoFile;
@@ -205,7 +221,7 @@ void MainWindow::createControlWidgets(QBoxLayout* layout, QWidget* parent)
     m_volumeSlider->setFixedWidth(100);
     connect(m_volumeSlider, &QSlider::valueChanged, this, [this](int value) {
         m_volume = static_cast<float>(value) / 100.0f;
-        if (m_audioRenderer || !m_audioRenderer) {
+        if (m_audioRenderer) {
             m_audioRenderer->setVolume(m_volume);
         }
         updateVolumeIcon();
@@ -394,6 +410,15 @@ void MainWindow::onPlayback(int64_t ptsUs)
 void MainWindow::onPlaybackFinished()
 {
     closeVideo();
+}
+
+void MainWindow::onVideoRendererInitialized()
+{
+    if (!m_commandInputFile.isEmpty()) {
+        auto videoFile = m_commandInputFile;
+        m_commandInputFile = QString{};
+        openVideo(videoFile);
+    }
 }
 
 } // namespace view

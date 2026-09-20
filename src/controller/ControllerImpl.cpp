@@ -10,13 +10,6 @@
 #include "ffmpeg_helper/FFmpegError.h"
 
 namespace {
-int64_t steadyTimeUs()
-{
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
 // 音画同步校准参数。音频渲染侧上报的位置按设备buffer粒度量化且回调时机带抖动，
 // 时钟不能被每次回调直接重置，否则视频帧放行节奏随上报抖动来回跳：
 // - 偏差在死区内：不校正，过滤上报抖动
@@ -28,7 +21,40 @@ constexpr int64_t SYNC_SNAP_US = 300 * 1000;
 constexpr double SYNC_CATCH_UP_SPEED = 1.05;
 constexpr double SYNC_FALL_BACK_SPEED = 0.95;
 
+int64_t steadyTimeUs()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
+
+bool containsPixelFormat(const std::vector<controller::Frame::PixelFormat>& pixelFormats, controller::Frame::PixelFormat target)
+{
+    return std::find(pixelFormats.begin(), pixelFormats.end(), target) != pixelFormats.end();
+}
+
+AVPixelFormat getPreferredSupportedPixelFormat(const std::vector<controller::Frame::PixelFormat>& pixelFormats)
+{
+    for (const auto& format : pixelFormats) {
+        if (format < controller::Frame::PixelFormat::D3D11) {
+            return controller::Frame::toAvPixelFormat(format);
+        }
+    }
+    return AV_PIX_FMT_NONE;
+}
+
+AVPixelFormat dxvaDecoderSoftwareFramePixelFormat(int bit)
+{
+    switch (bit) {
+        case 8:
+            return AV_PIX_FMT_NV12;
+        case 10:
+            return AV_PIX_FMT_P010LE;
+        default:
+            return AV_PIX_FMT_NONE;
+    }
+}
+} // namespace
 
 namespace controller {
 std::unique_ptr<IController> IController::create(const Params& params)
@@ -108,6 +134,10 @@ bool Controller::initialize()
     constexpr size_t TARGET_AUDIO_QUEUE_DURATION = 3; // 音频比视频短
 
     auto demuxer = Demuxer::create(m_params.url, m_logger);
+    if (!demuxer) {
+        LOGE("Failed to create demuxer");
+        return false;
+    }
 
     for (int i = 0; i < demuxer->streamCount(); ++i) {
         auto* stream = demuxer->stream(i);
@@ -122,22 +152,12 @@ bool Controller::initialize()
             videoDecodeParams.stream = stream;
             videoDecodeParams.logger = m_logger;
 
-            if (videoDecoder->type() == Decoder::Type::Software) {
-                SwsProcessor::TargetFormat targetFormat{};
-                targetFormat.format = AV_PIX_FMT_YUV420P;
-                std::shared_ptr<SwsProcessor> swsProcessor = std::make_shared<SwsProcessor>(targetFormat, m_logger);
-                videoDecodeParams.frameProcessors.push_back(swsProcessor);
-            } else if (m_params.enableHwTransfer) {
-                std::shared_ptr<HWTransferProcessor> hwTransferProcessor = std::make_shared<HWTransferProcessor>(m_logger);
-                videoDecodeParams.frameProcessors.push_back(hwTransferProcessor);
-                SwsProcessor::TargetFormat targetFormat{};
-                targetFormat.format = AV_PIX_FMT_YUV420P;
-                std::shared_ptr<SwsProcessor> swsProcessor = std::make_shared<SwsProcessor>(targetFormat, m_logger);
-                videoDecodeParams.frameProcessors.push_back(swsProcessor);
-            } else {
-                // 硬件解码并且不转换硬件帧，不需要后处理
-                LOGI("Hardware decoding without hardware frame transfer, no post-processing needed.");
+            auto processorList = makeFrameProcessors(stream, videoDecoder);
+            if (!processorList) {
+                LOGE("Failed to create frame processors");
+                return false;
             }
+            videoDecodeParams.frameProcessors = std::move(*processorList);
 
             // 要根据时长计算队列长度
             double fps = av_q2d(stream->avg_frame_rate);
@@ -488,7 +508,7 @@ bool Controller::testHardwareDecoder(DecoderPtr& decoder, DemuxerPtr& demuxer, i
                 return false;
             }
             // 如果需要转换为软件帧，测试转换是否成功
-            if (m_params.enableHwTransfer) {
+            if (!containsPixelFormat(m_params.requirePixelFormats, IFrame::PixelFormat::D3D11)) {
                 auto hwTransferProcessor = std::make_unique<HWTransferProcessor>(m_logger);
                 if (!hwTransferProcessor->process(std::move(frameExp.value()))) {
                     LOGW("Hardware frame transfer to software frame failed");
@@ -500,6 +520,49 @@ bool Controller::testHardwareDecoder(DecoderPtr& decoder, DemuxerPtr& demuxer, i
         }
     }
     return false;
+}
+
+std::optional<FrameProcessorList> Controller::makeFrameProcessors(const AVStream* stream, DecoderPtr& decoder)
+{
+    FrameProcessorList processors;
+
+    // 获取首选软件帧格式
+    auto preferredPixelFormat = getPreferredSupportedPixelFormat(m_params.requirePixelFormats);
+    AVPixelFormat streamSwPixelFormat = AV_PIX_FMT_NONE;
+
+    if (decoder->type() == Decoder::Type::Dxva) {
+        // 对于硬解码，如果支持处理硬件帧，不需要任何后处理
+        if (containsPixelFormat(m_params.requirePixelFormats, IFrame::PixelFormat::D3D11)) {
+            return processors;  // 支持硬件帧，不用任何后处理
+        }
+
+        // 否则需要将硬件帧转换为软件帧
+        auto hwTransferProcessor = std::make_shared<HWTransferProcessor>(m_logger);
+        processors.push_back(hwTransferProcessor);
+
+        streamSwPixelFormat = dxvaDecoderSoftwareFramePixelFormat(stream->codecpar->bits_per_coded_sample);
+    } else if (decoder->type() == Decoder::Type::Software) {
+        streamSwPixelFormat = static_cast<AVPixelFormat>(stream->codecpar->format);
+    }
+
+    if (streamSwPixelFormat == AV_PIX_FMT_NONE) {
+        LOGW("Failed to determine software frame pixel format");
+        return std::nullopt;
+    }
+
+    // 软件帧是否在支持的像素格式列表中，如果在就不用转换软件帧格式
+    if (containsPixelFormat(m_params.requirePixelFormats, Frame::toPixelFormat(streamSwPixelFormat))) {
+        return processors;
+    }
+
+    SwsProcessor::TargetFormat targetFormat;
+    targetFormat.format = preferredPixelFormat;
+    targetFormat.width = decoder->width();
+    targetFormat.height = decoder->height();
+    auto swsProcessor = std::make_shared<SwsProcessor>(targetFormat, m_logger);
+    processors.push_back(swsProcessor);
+
+    return processors;
 }
 
 } // namespace controller
