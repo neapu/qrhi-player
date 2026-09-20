@@ -11,14 +11,11 @@ public:
     QSize size() const override { return m_size; }
     QRhiShaderResourceBindings* shaderResourceBinding() const override { return m_srb.get(); }
 
-    void updateVertexTransformMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix) override;
-    void updateColorRangeConversionMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix) override;
-    void updateYUVtoRGBMatrix(QRhiResourceUpdateBatch* rub, const QMatrix4x4& matrix) override;
-
     void updateTexture(QRhiResourceUpdateBatch* rub, const controller::FramePtr& frame) override;
 
 protected:
-    bool initialize(const Params& params) override;
+    // 只初始化 YUV 纹理/采样器/SRB；矩阵 uniform buffer 由基类 initialize() 统一创建
+    bool initializeResources(const Params& params) override;
 
 protected:
     QSize m_size;
@@ -29,9 +26,5 @@ protected:
     std::unique_ptr<QRhiSampler> m_sampler;
 
     std::unique_ptr<QRhiShaderResourceBindings> m_srb;
-
-    std::unique_ptr<QRhiBuffer> m_vsVertexTransformMatrix; // 对应video.vert中的UBuf变量，绑定位置3
-    std::unique_ptr<QRhiBuffer> m_fsColorRangeConversionMatrix; // 对应yuv420p.frag中的ColorRangeBlock变量，绑定位置4，在着色器中先乘
-    std::unique_ptr<QRhiBuffer> m_fsYUVtoRGBMatrix; // 对应yuv420p.frag中的YuvToRGBBlock变量，绑定位置5，在着色器中后乘
 };
 } // namespace view

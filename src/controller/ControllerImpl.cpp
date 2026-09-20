@@ -444,7 +444,7 @@ DecoderPtr Controller::createVideoDecoder(const AVStream* stream, DemuxerPtr& de
 
     // 解码一帧测试，如果失败了，需要回退到软件解码
     auto ret = testHardwareDecoder(hwDecoder, demuxer, stream->index);
-    if (!demuxer->seek(-1, 0)) { // 回退到流的起始位置
+    if (!demuxer->reset()) { // 回退到流的起始位置
         LOGW("Failed to seek demuxer to the beginning after hardware decoder test");
     }
     if (!ret) {
@@ -487,7 +487,15 @@ bool Controller::testHardwareDecoder(DecoderPtr& decoder, DemuxerPtr& demuxer, i
                 LOGW("Hardware decoder test failed with error: " << fh::err2str(err));
                 return false;
             }
-            // 成功接收到一帧，说明硬件解码器工作正常
+            // 如果需要转换为软件帧，测试转换是否成功
+            if (m_params.enableHwTransfer) {
+                auto hwTransferProcessor = std::make_unique<HWTransferProcessor>(m_logger);
+                if (!hwTransferProcessor->process(std::move(frameExp.value()))) {
+                    LOGW("Hardware frame transfer to software frame failed");
+                    return false;
+                }
+            }
+
             return true;
         }
     }

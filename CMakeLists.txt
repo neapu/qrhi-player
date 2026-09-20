@@ -25,4 +25,3 @@ endif ()
 
 add_subdirectory(src/view)
 add_subdirectory(src/controller)
-add_subdirectory(src/benchmark)

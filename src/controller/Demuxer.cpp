@@ -82,6 +82,20 @@ bool Demuxer::seek(int streamIndex, int64_t pts)
     return true;
 }
 
+bool Demuxer::reset()
+{
+    if (!m_inputContext) {
+        LOGE("Input context is not initialized");
+        return false;
+    }
+    int ret = avformat_seek_file(m_inputContext.get(), -1, INT64_MIN, 0, INT64_MAX, 0);
+    if (ret < 0) {
+        LOGE("Failed to reset, error code: " << fh::err2str(ret));
+        return false;
+    }
+    return true;
+}
+
 double Demuxer::duration() const
 {
     if (!m_inputContext) {

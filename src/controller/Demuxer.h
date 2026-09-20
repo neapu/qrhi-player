@@ -15,6 +15,8 @@ public:
 
     controller::PacketPtr readPacket(int serial);
     bool seek(int streamIndex, int64_t pts);
+    // 重置媒体文件到开头
+    bool reset();
 
     double duration() const;
     

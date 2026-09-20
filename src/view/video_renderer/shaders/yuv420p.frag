@@ -4,12 +4,12 @@ layout(location = 0) out vec4 fragColor;
 layout(binding = 0) uniform sampler2D yTexture;
 layout(binding = 1) uniform sampler2D uTexture;
 layout(binding = 2) uniform sampler2D vTexture;
-// 色彩范围(limited/full)扩展矩阵，绑定位置4，对应YuvShaderResource::m_fsColorRangeConversionMatrix
+// 色彩范围(limited/full)扩展矩阵，绑定位置4，对应ShaderResource::m_fsColorRangeConversionMatrix
 // 作用对象是采样得到的YUV，是YUV空间里的逐分量仿射变换，必须先乘
 layout(std140, binding = 4) uniform ColorRangeBlock {
     mat4 COLOR_RANGE;
 };
-// YUV转RGB矩阵，绑定位置5，对应YuvShaderResource::m_fsYUVtoRGBMatrix
+// YUV转RGB矩阵，绑定位置5，对应ShaderResource::m_fsYUVtoRGBMatrix
 // 必须在色彩范围扩展之后乘
 layout(std140, binding = 5) uniform YuvToRGBBlock {
     mat4 YUV_TO_RGB;

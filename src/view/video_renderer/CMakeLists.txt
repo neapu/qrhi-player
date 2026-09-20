@@ -9,6 +9,13 @@ set(SRC_FILES
     YuvShaderResource.cpp
 )
 
+if (WIN32)
+    list(APPEND SRC_FILES
+        D3D11ShaderResource.h
+        D3D11ShaderResource.cpp
+    )
+endif()
+
 add_library(${LIB_NAME} ${SRC_FILES})
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS ShaderTools)
