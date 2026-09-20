@@ -1,11 +1,20 @@
 #include "FrameImpl.h"
 
+extern "C" {
+#include <libavutil/pixfmt.h>
+#include <libavutil/hwcontext.h>
+}
+
 namespace {
 controller::Frame::PixelFormat toPixelFormat(AVPixelFormat format)
 {
     using enum controller::Frame::PixelFormat;
     switch (format) {
         case AV_PIX_FMT_YUV420P: return YUV420P;
+        case AV_PIX_FMT_YUV420P10LE: return YUV420P10LE;
+        case AV_PIX_FMT_NV12: return NV12;
+        case AV_PIX_FMT_P010LE: return P010LE;
+        case AV_PIX_FMT_D3D11: return D3D11;
         default: return None;
     }
 }
@@ -14,6 +23,10 @@ AVPixelFormat toAVPixelFormat(controller::Frame::PixelFormat format)
     using enum controller::Frame::PixelFormat;
     switch (format) {
         case YUV420P: return AV_PIX_FMT_YUV420P;
+        case YUV420P10LE: return AV_PIX_FMT_YUV420P10LE;
+        case NV12: return AV_PIX_FMT_NV12;
+        case P010LE: return AV_PIX_FMT_P010LE;
+        case D3D11: return AV_PIX_FMT_D3D11;
         default: return AV_PIX_FMT_NONE;
     }
 }
@@ -97,6 +110,18 @@ int Frame::height() const
 Frame::PixelFormat Frame::pixelFormat() const
 {
     return m_frame ? toPixelFormat(static_cast<AVPixelFormat>(m_frame->format)) : PixelFormat::None;
+}
+
+Frame::PixelFormat Frame::swPixelFormat() const
+{
+    if (!m_frame) {
+        return PixelFormat::None;
+    }
+    if (!m_frame->hw_frames_ctx) {
+        return pixelFormat();
+    }
+    auto* hwFramesCtx = reinterpret_cast<AVHWFramesContext*>(m_frame->hw_frames_ctx->data);
+    return toPixelFormat(static_cast<AVPixelFormat>(hwFramesCtx->sw_format));
 }
 
 Frame::ColorSpace Frame::colorSpace() const

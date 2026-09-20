@@ -19,6 +19,7 @@ public:
     int height() const override;
 
     PixelFormat pixelFormat() const override;
+    PixelFormat swPixelFormat() const override;
     ColorSpace colorSpace() const override;
     ColorRange colorRange() const override;
 

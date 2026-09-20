@@ -33,6 +33,11 @@ public:
     enum class PixelFormat {
         None,
         YUV420P,
+        YUV420P10LE,
+        NV12,
+        P010LE,
+
+        D3D11,
     };
     enum class ColorSpace {
         BT601, // 其他全部退化到BT601
@@ -58,6 +63,11 @@ public:
      * @return PixelFormat 帧的像素格式
      */
     virtual PixelFormat pixelFormat() const = 0;
+    /**
+     * @brief 当帧格式为硬件帧格式时，获取对应的软件像素格式
+     * @return PixelFormat 对应的软件像素格式
+     */
+    virtual PixelFormat swPixelFormat() const = 0;
     /**
      * @brief 获取帧的色彩空间
      * @return ColorSpace 帧的色彩空间
