@@ -3,6 +3,8 @@
 #include "Logger.h"
 #include "DemuxerWorker.h"
 #include "DecodeWorker.h"
+#include "PacketQueue.h"
+#include "FrameQueue.h"
 
 namespace controller {
 class Controller final : public IController {
@@ -25,17 +27,27 @@ public:
 
 private:
     void onPacketRead(controller::PacketPtr&& packet);
-    // seek成功后由解封装线程回调：时钟重锚到本次请求的目标
+    // 把包投递给指定流的包队列；队列满而等待被seek打断时，重判过时性后决定丢弃或重投
+    void routePacket(PacketQueue& packetQueue, controller::PacketPtr&& packet);
+    // seek成功后由解封装线程回调：两个队列换代，时钟重锚到本次请求的目标
     void onSeekSucceeded(int serial, int64_t targetUs);
     int64_t clockUsLocked() const; // 读取当前媒体时间(us)，调用方需持有m_clock.mutex
     void reanchorLocked(int64_t mediaUs, double speed); // 重新锚定时钟并设置速率，调用方需持有m_clock.mutex
     DecoderPtr createVideoDecoder(const AVStream* stream, DemuxerPtr& demuxer);
     bool testHardwareDecoder(DecoderPtr& decoder, DemuxerPtr& demuxer, int streamIndex);
     std::optional<FrameProcessorList> makeFrameProcessors(const AVStream* stream, DecoderPtr& decoder);
+    void initializeLogger();
+    bool initializeVideo(DemuxerPtr& demuxer, int streamIndex);
+    bool initializeAudio(DemuxerPtr& demuxer, int streamIndex);
 
 private:
     Params m_params;
     std::shared_ptr<Logger> m_logger{};
+    // 队列声明在worker之前：worker只借用队列(裸指针)，析构时先stop worker再由本对象销毁队列
+    std::unique_ptr<PacketQueue> m_videoPacketQueue{nullptr};
+    std::unique_ptr<PacketQueue> m_audioPacketQueue{nullptr};
+    std::unique_ptr<FrameQueue> m_videoFrameQueue{nullptr};
+    std::unique_ptr<FrameQueue> m_audioFrameQueue{nullptr};
     std::unique_ptr<DemuxerWorker> m_demuxerWorker{nullptr};
     std::unique_ptr<DecodeWorker> m_videoWorker{nullptr};
     std::unique_ptr<DecodeWorker> m_audioWorker{nullptr};

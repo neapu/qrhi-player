@@ -3,11 +3,19 @@
 namespace controller {
 std::unique_ptr<DemuxerWorker> DemuxerWorker::create(const Params& params, DemuxerPtr&& demuxer)
 {
-    auto worker = std::unique_ptr<DemuxerWorker>(new DemuxerWorker());
-    if (!worker->initialize(params, std::move(demuxer))) {
+    auto worker = std::unique_ptr<DemuxerWorker>(new DemuxerWorker(params));
+    if (!worker->initialize(std::move(demuxer))) {
         return nullptr;
     }
     return worker;
+}
+
+DemuxerWorker::DemuxerWorker(const Params& params)
+    : m_logger(params.logger)
+    , m_onPacketRead(params.onPacketRead)
+    , m_onSeekSucceeded(params.onSeekSucceeded)
+    , m_onSeekRequested(params.onSeekRequested)
+{
 }
 
 DemuxerWorker::~DemuxerWorker()
@@ -40,23 +48,24 @@ void DemuxerWorker::seek(int streamIndex, int64_t pts)
     {
         std::lock_guard<std::mutex> lock(m_seekMutex);
         m_seekRequest = SeekRequest{streamIndex, pts};
-        // 与m_seekRequest同时持锁修改：m_seekPending是解码线程阻塞谓词的一部分，
-        // 投递后置位，保证解码线程在进入等待前可见
+        // 与m_seekRequest同时持锁修改：m_seekPending是生产侧阻塞谓词的一部分，
+        // 投递后置位，保证生产侧在进入等待前可见
         m_seekPending.store(true);
+    }
+    // 请求已发布：回调让可能阻塞在包队列满上的生产者重新决策。
+    // 在锁外调用，回调只做唤醒，不参与m_seekMutex保护的临界区
+    if (m_onSeekRequested) {
+        m_onSeekRequested();
     }
     m_seekCV.notify_all();
 }
 
-bool DemuxerWorker::initialize(const Params& params, DemuxerPtr&& demuxer)
+bool DemuxerWorker::initialize(DemuxerPtr&& demuxer)
 {
-    if (!params.logger || !params.onPacketRead) {
+    if (!m_logger || !m_onPacketRead || !m_onSeekSucceeded || !m_onSeekRequested) {
         return false;
     }
-    m_logger = params.logger;
     FUNC_TRACE();
-
-    m_onPacketRead = params.onPacketRead;
-    m_onSeekSucceeded = params.onSeekSucceeded;
     m_demuxer = std::move(demuxer);
     if (!m_demuxer) {
         LOGE("Failed to create Demuxer");
@@ -65,7 +74,7 @@ bool DemuxerWorker::initialize(const Params& params, DemuxerPtr&& demuxer)
 
     m_exitFlag = false;
     m_thread = std::thread(&DemuxerWorker::workerFunc, this);
-    
+
     return true;
 }
 
@@ -122,6 +131,5 @@ void DemuxerWorker::workerFunc()
         }
         m_onPacketRead(std::move(packet));
     }
-
 }
 } // namespace controller

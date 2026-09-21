@@ -1,41 +1,39 @@
 #pragma once
 #include <memory>
-#include <deque>
 #include <thread>
 #include <atomic>
-#include <mutex>
-#include <condition_variable>
+#include <vector>
 #include "Decoder.h"
 #include "Logger.h"
 #include "FrameProcessor.h"
+#include "PacketQueue.h"
+#include "FrameQueue.h"
 
 namespace controller {
+/**
+ * @brief 解码线程：独占Decoder与帧处理器链，解码只在自身线程上进行。
+ *
+ * 与外界的两端都通过被动队列交接，因此本类不暴露任何"会被别的线程调用"的方法：
+ * - 入口：PacketQueue(生产者=解封装线程，消费者=本线程)
+ * - 出口：FrameQueue(生产者=本线程，消费者=UI/音频线程)
+ * 除stop()外，本类的方法只允许在所属线程上调用；stop()只允许由持有者(Controller)调用。
+ */
 class DecodeWorker {
 public:
     struct Params {
         const AVStream* stream{nullptr};
         std::shared_ptr<Logger> logger{nullptr};
         FrameProcessorList frameProcessors;
-        size_t maxPacketQueueDepth{100};
-        // 允许丢帧(视频)：出队侧按主时钟丢弃被新帧覆盖的到期帧
-        bool canDropFrames{false};
-        // 时钟策略：true=严格按时钟放行(视频)；false=时钟跳变超过阈值才限制(音频)
-        bool controlClock{true};
-        // 中断查询：返回true表示当前包已因pending seek过时，应丢弃。
-        // 同时作为包队列满时阻塞等待的唤醒条件，避免解封装线程被旧数据卡住延迟消费seek请求
-        std::function<bool()> interrupt;
+        // 裸指针安全声明：只借用，不管理生命周期。队列由Controller持有，
+        // 且必须比本worker长寿(Controller析构时先stop()再销毁队列)
+        PacketQueue* packetQueue{nullptr};
+        FrameQueue* frameQueue{nullptr};
     };
     static std::unique_ptr<DecodeWorker> create(const Params& params, DecoderPtr&& decoder);
 
     virtual ~DecodeWorker();
 
-    void sendPacket(PacketPtr&& packet);
-    FramePtr receiveFrame(int64_t playTimeUs);
-
-    // seek投递后调用：唤醒可能因包队列满而阻塞在sendPacket的解封装线程，
-    // 其等待谓词会重查interrupt回调并丢弃在途旧包
-    void interrupt();
-
+    // 停止解码线程：关闭两个队列(同时解除两端阻塞)后回收线程。调用后不可重启
     void stop();
 
     int streamIndex() const;
@@ -43,8 +41,6 @@ public:
     // 已打开的解码上下文，输出帧的参数以此为准；create失败时为nullptr
     const AVCodecContext* codecContext() const { return m_decoder ? m_decoder->codecContext() : nullptr; }
 
-    // 消费端累计丢弃的帧数，用于统计/调试
-    uint64_t droppedFrames() const { return m_droppedFrames.load(std::memory_order_relaxed); }
     // 解码线程累计解码的帧数，用于统计/调试
     uint64_t decodedFrames() const { return m_decodedFrames.load(std::memory_order_relaxed); }
 
@@ -63,31 +59,13 @@ protected:
     std::shared_ptr<Logger> m_logger{nullptr};
     const AVStream* m_stream{nullptr};
     FrameProcessorList m_frameProcessors;
-    std::function<bool()> m_interrupt;
-
-    std::deque<PacketPtr> m_packetQueue;
-    std::mutex m_packetQueueMutex;
-    std::condition_variable m_packetQueueCV;
-    size_t m_maxPacketQueueDepth{100};
-
-    // 这里不用FramePtr，因为FramePtr声明的是IFrame抽象类，内部处理时需要具体的Frame实现
-    std::deque<std::unique_ptr<Frame>> m_frameQueue;
-    std::mutex m_frameQueueMutex;
-    std::condition_variable m_frameQueueCV;
-    size_t m_maxFrameQueueDepth{5};
+    // 裸指针安全声明：只借用，不管理生命周期(见Params)
+    PacketQueue* m_packetQueue{nullptr};
+    FrameQueue* m_frameQueue{nullptr};
 
     std::unique_ptr<Decoder> m_decoder{nullptr};
     std::thread m_thread;
-    std::atomic_bool m_exitFlag{false};
-
-    std::atomic_int m_serial{0};
-
-    // 丢帧策略(仅视频)：出队侧按主时钟丢弃被覆盖的到期帧，丢弃量由实际迟到程度决定
-    bool m_canDropFrames{false};
-    // 时钟策略：true=严格按时钟放行(视频)，false=时钟跳变超过阈值才限制(音频)
-    bool m_controlClock{true};
-    // 消费端累计丢帧数，用于统计/调试
-    std::atomic_uint64_t m_droppedFrames{0};
+    // 解码线程累计解码的帧数，用于统计/调试
     std::atomic_uint64_t m_decodedFrames{0};
 };
 

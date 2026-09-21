@@ -20,6 +20,8 @@ constexpr int64_t SYNC_DEAD_BAND_US = 25 * 1000; // 死区约一帧以内
 constexpr int64_t SYNC_SNAP_US = 300 * 1000;
 constexpr double SYNC_CATCH_UP_SPEED = 1.05;
 constexpr double SYNC_FALL_BACK_SPEED = 0.95;
+constexpr size_t TARGET_VIDEO_QUEUE_DURATION = 10; // 视频缓冲时长(包队列)
+constexpr size_t TARGET_AUDIO_QUEUE_DURATION = 3; // 音频比视频短
 
 int64_t steadyTimeUs()
 {
@@ -73,7 +75,8 @@ Controller::Controller(const Params& params) : m_params(params)
 Controller::~Controller()
 {
     FUNC_TRACE();
-    // 需要先解除解码线程入队阻塞，才能停止解封装线程
+    // 先停解码线程：stop()会关闭两个队列，同时解除解封装线程在包队列满上的阻塞，
+    // 之后才能停止解封装线程(否则它可能卡在push里)
     if (m_videoWorker) {
         m_videoWorker->stop();
     }
@@ -87,51 +90,13 @@ Controller::~Controller()
 
 bool Controller::initialize()
 {
-    if (m_params.logCallback) {
-        m_logger = std::make_shared<Logger>(m_params.logCallback);
-    } else {
-        m_logger = std::make_shared<Logger>([](LogLevel level, const std::string& fileName, int line, const std::string& message) {
-            std::string logLevel{"Debug"};
-            switch (level) {
-                case LogLevel::Debug:
-                    logLevel = "Debug";
-                    break;
-                case LogLevel::Info:
-                    logLevel = "Info";
-                    break;
-                case LogLevel::Warning:
-                    logLevel = "Warning";
-                    break;
-                case LogLevel::Error:
-                    logLevel = "Error";
-                    break;
-                case LogLevel::Fatal:
-                    logLevel = "Fatal";
-                    break;
-            };
-            const auto now = std::chrono::system_clock::now();
-            const auto timet = std::chrono::system_clock::to_time_t(now);
-            std::tm tm{};
-#ifdef _WIN32
-            localtime_s(&tm, &timet); // std::localtime 返回静态缓冲区，多线程调用是数据竞争
-#else
-            localtime_r(&timet, &tm);
-#endif
-            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
-            std::print("[{}-{:02}-{:02} {:02}:{:02}:{:02}.{}] [{}] {}:{} {}\n",
-                       tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                       tm.tm_hour, tm.tm_min, tm.tm_sec,
-                       static_cast<int>(ms),
-                       logLevel, fileName, line, message);
-        });
-    }
+    initializeLogger();
     
-    auto tracer = m_logger->trace();
+    FUNC_TRACE();
 
     LOGI("Opening file: " << m_params.url);
 
-    constexpr size_t TARGET_VIDEO_QUEUE_DURATION = 10; // 视频缓冲时长(包队列)
-    constexpr size_t TARGET_AUDIO_QUEUE_DURATION = 3; // 音频比视频短
+    
 
     auto demuxer = Demuxer::create(m_params.url, m_logger);
     if (!demuxer) {
@@ -142,81 +107,14 @@ bool Controller::initialize()
     for (int i = 0; i < demuxer->streamCount(); ++i) {
         auto* stream = demuxer->stream(i);
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && !m_videoWorker) {
-            auto videoDecoder = createVideoDecoder(stream, demuxer);
-            if (!videoDecoder) {
-                LOGE("Failed to create Video Decoder");
-                return false;
-            }
-
-            DecodeWorker::Params videoDecodeParams{};
-            videoDecodeParams.stream = stream;
-            videoDecodeParams.logger = m_logger;
-
-            auto processorList = makeFrameProcessors(stream, videoDecoder);
-            if (!processorList) {
-                LOGE("Failed to create frame processors");
-                return false;
-            }
-            videoDecodeParams.frameProcessors = std::move(*processorList);
-
-            // 要根据时长计算队列长度
-            double fps = av_q2d(stream->avg_frame_rate);
-            fps = fps > 0 ? fps : av_q2d(stream->r_frame_rate);
-            fps = fps > 0 ? fps : 30.0; // 默认帧率为30
-            videoDecodeParams.maxPacketQueueDepth = static_cast<size_t>(TARGET_VIDEO_QUEUE_DURATION * fps);
-            // 视频允许丢帧：出队侧按主时钟丢弃被覆盖的到期帧
-            videoDecodeParams.canDropFrames = true;
-            // pending seek时丢弃在途旧包并打断包队列满的阻塞，保证解封装线程及时消费seek请求
-            videoDecodeParams.interrupt = [this]() {
-                return m_demuxerWorker && m_demuxerWorker->seekPending();
-            };
-            
-            m_videoWorker = DecodeWorker::create(videoDecodeParams, std::move(videoDecoder));
-            if (!m_videoWorker) {
-                LOGE("Failed to create Video DecodeWorker");
+            if (!initializeVideo(demuxer, stream->index)) {
+                LOGE("Failed to initialize video stream");
                 return false;
             }
         } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && !m_audioWorker) {
-            SwrProcessor::TargetFormat targetFormat{};
-            targetFormat.format = AV_SAMPLE_FMT_S16;
-            std::shared_ptr<SwrProcessor> swrProcessor = std::make_shared<SwrProcessor>(targetFormat, m_logger);
-
-            DecodeWorker::Params audioDecodeParams{};
-            audioDecodeParams.stream = stream;
-            audioDecodeParams.logger = m_logger;
-            audioDecodeParams.frameProcessors.push_back(swrProcessor);
-            // 要根据时长计算队列长度：包速率 = 采样率 / 每包样本数(frame_size)，
-            // 部分编码frame_size未知时按1024(AAC典型值)估算
-            double sampleRate = stream->codecpar->sample_rate;
-            sampleRate = sampleRate > 0 ? sampleRate : 44100; // 默认采样率为44100
-            double frameSize = stream->codecpar->frame_size;
-            frameSize = frameSize > 0 ? frameSize : 1024.0;
-            audioDecodeParams.maxPacketQueueDepth = std::max<size_t>(
-                static_cast<size_t>(TARGET_AUDIO_QUEUE_DURATION * sampleRate / frameSize), 16);
-            audioDecodeParams.canDropFrames = false; // 音频一般不丢帧
-            audioDecodeParams.controlClock = false; // 音频不做严格时钟门控，按阈值放行
-            audioDecodeParams.interrupt = [this]() {
-                return m_demuxerWorker && m_demuxerWorker->seekPending();
-            };
-
-            Decoder::Params decoderParams{};
-            decoderParams.type = Decoder::Type::Software;
-            decoderParams.stream = stream;
-            decoderParams.logger = m_logger;
-            auto decoder = Decoder::create(decoderParams);
-            m_audioWorker = DecodeWorker::create(audioDecodeParams, std::move(decoder));
-            if (!m_audioWorker) {
-                LOGE("Failed to create Audio DecodeWorker");
+            if (!initializeAudio(demuxer, stream->index)) {
+                LOGE("Failed to initialize audio stream");
                 return false;
-            }
-            // 从已打开的解码上下文取输出参数(比codecpar更准，解码器open时可能修正)；
-            // SwrProcessor对采样率/声道是透传，帧参数即解码器参数，采样格式固定为S16
-            if (const auto* codecCtx = m_audioWorker->codecContext()) {
-                AudioParams params;
-                params.sampleRate = codecCtx->sample_rate;
-                params.channels = codecCtx->ch_layout.nb_channels;
-                params.sampleFormat = IFrame::SampleFormat::S16LE;
-                m_audioParams = params;
             }
         }
     }
@@ -235,6 +133,18 @@ bool Controller::initialize()
     demuxerParams.onSeekSucceeded = [this](int serial, int64_t targetUs) {
         onSeekSucceeded(serial, targetUs);
     };
+    // seek请求发布后由DemuxerWorker触发(与seek结果无关，seek失败也要唤醒，
+    // 否则请求会被压在阻塞的等待之后)：唤醒可能因包队列满而阻塞的解封装线程，
+    // 其push会返回Interrupted，由routePacket重判过时性。
+    // 顺序约束收在DemuxerWorker内，Controller不需要知道"先seek再interrupt"
+    demuxerParams.onSeekRequested = [this]() {
+        if (m_videoPacketQueue) {
+            m_videoPacketQueue->interrupt();
+        }
+        if (m_audioPacketQueue) {
+            m_audioPacketQueue->interrupt();
+        }
+    };
     m_demuxerWorker = DemuxerWorker::create(demuxerParams, std::move(demuxer));
     if (!m_demuxerWorker) {
         LOGE("Failed to create DemuxerWorker");
@@ -246,7 +156,7 @@ bool Controller::initialize()
 
 FramePtr Controller::nextVideoFrame()
 {
-    if (!m_videoWorker) {
+    if (!m_videoFrameQueue) {
         return nullptr;
     }
 
@@ -255,12 +165,12 @@ FramePtr Controller::nextVideoFrame()
         return nullptr;
     }
 
-    return m_videoWorker->receiveFrame(clockUsLocked());
+    return m_videoFrameQueue->pop(clockUsLocked());
 }
 
 FramePtr Controller::nextAudioFrame()
 {
-    if (!m_audioWorker) {
+    if (!m_audioFrameQueue) {
         return nullptr;
     }
 
@@ -269,7 +179,7 @@ FramePtr Controller::nextAudioFrame()
         return nullptr;
     }
 
-    auto frame = m_audioWorker->receiveFrame(clockUsLocked());
+    auto frame = m_audioFrameQueue->pop(clockUsLocked());
     if (frame && frame->serial() != m_clock.servedAudioSerial) {
         m_clock.servedAudioSerial = frame->serial();
         if (frame->type() == IFrame::FrameType::Normal && frame->pts() != AV_NOPTS_VALUE) {
@@ -349,15 +259,10 @@ void Controller::seek(double timepoint)
     LOGI("Seeking to " << timepoint << "s");
 
     // 仅投递请求，av_seek_frame与时钟重锚都在解封装线程成功后触发(onSeekSucceeded)，
-    // 不阻塞UI线程；seek失败时serial不递增、回调不触发，时钟与播放无缝保持原状
+    // 不阻塞UI线程；seek失败时serial不递增、回调不触发，时钟与播放无缝保持原状。
+    // 请求发布后对生产侧的唤醒由DemuxerWorker自己触发(见onSeekRequested)，
+    // 此处不需要知道任何握手顺序
     m_demuxerWorker->seek(-1, targetUs); // -1=容器默认流，pts为AV_TIME_BASE单位
-    // 唤醒可能因包队列满阻塞在sendPacket的解封装线程，使其尽快回到循环顶部消费seek请求
-    if (m_videoWorker) {
-        m_videoWorker->interrupt();
-    }
-    if (m_audioWorker) {
-        m_audioWorker->interrupt();
-    }
 }
 
 void Controller::pauseOrResume()
@@ -381,8 +286,10 @@ bool Controller::isPaused() const
 StatisticsData Controller::statistics() const
 {
     StatisticsData stats{};
+    if (m_videoFrameQueue) {
+        stats.video.droppedFrames = m_videoFrameQueue->droppedFrames();
+    }
     if (m_videoWorker) {
-        stats.video.droppedFrames = m_videoWorker->droppedFrames();
         stats.video.decodedFrames = m_videoWorker->decodedFrames();
     }
     return stats;
@@ -391,26 +298,61 @@ StatisticsData Controller::statistics() const
 void Controller::onPacketRead(controller::PacketPtr&& packet)
 {
     if (packet->type() == controller::Packet::PacketType::End) {
-        // 流结束，音视频线程都要通知到
-        if (m_videoWorker) {
-            auto endPacket = Packet::create(packet->serial(), controller::Packet::PacketType::End);
-            m_videoWorker->sendPacket(std::move(endPacket));
+        // 流结束，音视频队列都要通知到
+        if (m_videoPacketQueue) {
+            routePacket(*m_videoPacketQueue, Packet::create(packet->serial(), controller::Packet::PacketType::End));
         }
-        if (m_audioWorker) {
-            auto endPacket = Packet::create(packet->serial(), controller::Packet::PacketType::End);
-            m_audioWorker->sendPacket(std::move(endPacket));
+        if (m_audioPacketQueue) {
+            routePacket(*m_audioPacketQueue, Packet::create(packet->serial(), controller::Packet::PacketType::End));
         }
     }
-    if (m_videoWorker && m_videoWorker->streamIndex() == packet->streamIndex()) {
-        m_videoWorker->sendPacket(std::move(packet));
-    } else if (m_audioWorker && m_audioWorker->streamIndex() == packet->streamIndex()) {
-        m_audioWorker->sendPacket(std::move(packet));
+    if (m_videoPacketQueue && m_videoPacketQueue->streamIndex() == packet->streamIndex()) {
+        routePacket(*m_videoPacketQueue, std::move(packet));
+    } else if (m_audioPacketQueue && m_audioPacketQueue->streamIndex() == packet->streamIndex()) {
+        routePacket(*m_audioPacketQueue, std::move(packet));
+    }
+}
+
+void Controller::routePacket(PacketQueue& packetQueue, controller::PacketPtr&& packet)
+{
+    for (;;) {
+        auto result = packetQueue.push(std::move(packet));
+        if (result == PacketQueue::PushResult::Pushed || result == PacketQueue::PushResult::Closed) {
+            return;
+        }
+        // Interrupted：队列满时的等待被seek打断。此时重判过时性：
+        // 请求已投递则此包读取自旧位置，丢弃它解封装线程才能尽快回到循环顶部消费请求
+        if (m_demuxerWorker && m_demuxerWorker->seekPending()) {
+            return;
+        }
+        // 打断与seek无关(如seek成功后清空队列)，继续投递
     }
 }
 
 void Controller::onSeekSucceeded(int serial, int64_t targetUs)
 {
-    // 解封装线程上回调，av_seek_frame已成功、serial已递增
+    // 解封装线程上回调，av_seek_frame已成功、serial已递增。
+    // 换代清空在这里统一完成，是"seek成功"唯一的作废落点：解封装线程随后才会
+    // readPacket并推入新代次的包，所以清空与推送天然有序，不需要队列自己识别serial
+    if (m_videoPacketQueue) {
+        m_videoPacketQueue->clear();
+    }
+    if (m_videoFrameQueue) {
+        size_t dropped = m_videoFrameQueue->reset(serial);
+        if (dropped > 0) {
+            LOGD("Discarded " << dropped << " frames of the previous generation, serial=" << serial);
+        }
+    }
+    if (m_audioPacketQueue) {
+        m_audioPacketQueue->clear();
+    }
+    if (m_audioFrameQueue) {
+        size_t dropped = m_audioFrameQueue->reset(serial);
+        if (dropped > 0) {
+            LOGD("Discarded " << dropped << " audio frames of the previous generation, serial=" << serial);
+        }
+    }
+
     std::lock_guard<std::mutex> lock(m_clock.mutex);
     m_clock.suppressAudioSync = (m_audioWorker != nullptr);
     if (m_clock.paused) {
@@ -563,6 +505,162 @@ std::optional<FrameProcessorList> Controller::makeFrameProcessors(const AVStream
     processors.push_back(swsProcessor);
 
     return processors;
+}
+
+void Controller::initializeLogger()
+{
+    if (m_params.logCallback) {
+        m_logger = std::make_shared<Logger>(m_params.logCallback);
+    } else {
+        m_logger = std::make_shared<Logger>([](LogLevel level, const std::string& fileName, int line, const std::string& message) {
+            std::string logLevel{"Debug"};
+            switch (level) {
+                case LogLevel::Debug:
+                    logLevel = "Debug";
+                    break;
+                case LogLevel::Info:
+                    logLevel = "Info";
+                    break;
+                case LogLevel::Warning:
+                    logLevel = "Warning";
+                    break;
+                case LogLevel::Error:
+                    logLevel = "Error";
+                    break;
+                case LogLevel::Fatal:
+                    logLevel = "Fatal";
+                    break;
+            };
+            const auto now = std::chrono::system_clock::now();
+            const auto timet = std::chrono::system_clock::to_time_t(now);
+            std::tm tm{};
+#ifdef _WIN32
+            localtime_s(&tm, &timet); // std::localtime 返回静态缓冲区，多线程调用是数据竞争
+#else
+            localtime_r(&timet, &tm);
+#endif
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+            std::print("[{}-{:02}-{:02} {:02}:{:02}:{:02}.{}] [{}] {}:{} {}\n",
+                       tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                       tm.tm_hour, tm.tm_min, tm.tm_sec,
+                       static_cast<int>(ms),
+                       logLevel, fileName, line, message);
+        });
+    }
+}
+
+bool Controller::initializeVideo(DemuxerPtr& demuxer, int streamIndex)
+{
+    const AVStream* stream = demuxer->stream(streamIndex);
+    auto videoDecoder = createVideoDecoder(stream, demuxer);
+    if (!videoDecoder) {
+        LOGE("Failed to create Video Decoder");
+        return false;
+    }
+
+    DecodeWorker::Params videoDecodeParams{};
+    videoDecodeParams.stream = stream;
+    videoDecodeParams.logger = m_logger;
+
+    auto processorList = makeFrameProcessors(stream, videoDecoder);
+    if (!processorList) {
+        LOGE("Failed to create frame processors");
+        return false;
+    }
+    videoDecodeParams.frameProcessors = std::move(*processorList);
+
+    // 包队列：解封装线程 → 解码线程。要根据时长计算队列长度
+    double fps = av_q2d(stream->avg_frame_rate);
+    fps = fps > 0 ? fps : av_q2d(stream->r_frame_rate);
+    fps = fps > 0 ? fps : 30.0; // 默认帧率为30
+    PacketQueue::Params videoPacketQueueParams{};
+    videoPacketQueueParams.streamIndex = stream->index;
+    videoPacketQueueParams.maxDepth = static_cast<size_t>(TARGET_VIDEO_QUEUE_DURATION * fps);
+    m_videoPacketQueue = PacketQueue::create(videoPacketQueueParams);
+    if (!m_videoPacketQueue) {
+        LOGE("Failed to create Video PacketQueue");
+        return false;
+    }
+
+    // 帧队列：解码线程 → 消费线程。视频允许丢帧：出队侧按主时钟丢弃被覆盖的到期帧
+    FrameQueue::Params videoFrameQueueParams{};
+    videoFrameQueueParams.canDropFrames = true;
+    m_videoFrameQueue = FrameQueue::create(videoFrameQueueParams);
+    if (!m_videoFrameQueue) {
+        LOGE("Failed to create Video FrameQueue");
+        return false;
+    }
+
+    videoDecodeParams.packetQueue = m_videoPacketQueue.get();
+    videoDecodeParams.frameQueue = m_videoFrameQueue.get();
+    m_videoWorker = DecodeWorker::create(videoDecodeParams, std::move(videoDecoder));
+    if (!m_videoWorker) {
+        LOGE("Failed to create Video DecodeWorker");
+        return false;
+    }
+    return true;
+}
+
+bool Controller::initializeAudio(DemuxerPtr& demuxer, int streamIndex)
+{
+    const AVStream* stream = demuxer->stream(streamIndex);
+    SwrProcessor::TargetFormat targetFormat{};
+    targetFormat.format = AV_SAMPLE_FMT_S16;
+    std::shared_ptr<SwrProcessor> swrProcessor = std::make_shared<SwrProcessor>(targetFormat, m_logger);
+
+    DecodeWorker::Params audioDecodeParams{};
+    audioDecodeParams.stream = stream;
+    audioDecodeParams.logger = m_logger;
+    audioDecodeParams.frameProcessors.push_back(swrProcessor);
+    // 包队列：解封装线程 → 解码线程。要根据时长计算队列长度：
+    // 包速率 = 采样率 / 每包样本数(frame_size)，部分编码frame_size未知时按1024(AAC典型值)估算
+    double sampleRate = stream->codecpar->sample_rate;
+    sampleRate = sampleRate > 0 ? sampleRate : 44100; // 默认采样率为44100
+    double frameSize = stream->codecpar->frame_size;
+    frameSize = frameSize > 0 ? frameSize : 1024.0;
+    PacketQueue::Params audioPacketQueueParams{};
+    audioPacketQueueParams.streamIndex = stream->index;
+    audioPacketQueueParams.maxDepth = std::max<size_t>(
+        static_cast<size_t>(TARGET_AUDIO_QUEUE_DURATION * sampleRate / frameSize), 16);
+    m_audioPacketQueue = PacketQueue::create(audioPacketQueueParams);
+    if (!m_audioPacketQueue) {
+        LOGE("Failed to create Audio PacketQueue");
+        return false;
+    }
+
+    // 帧队列：解码线程 → 消费线程。音频不丢帧，且不做严格时钟门控，按阈值放行
+    FrameQueue::Params audioFrameQueueParams{};
+    audioFrameQueueParams.canDropFrames = false;
+    audioFrameQueueParams.controlClock = false;
+    m_audioFrameQueue = FrameQueue::create(audioFrameQueueParams);
+    if (!m_audioFrameQueue) {
+        LOGE("Failed to create Audio FrameQueue");
+        return false;
+    }
+
+    audioDecodeParams.packetQueue = m_audioPacketQueue.get();
+    audioDecodeParams.frameQueue = m_audioFrameQueue.get();
+
+    Decoder::Params decoderParams{};
+    decoderParams.type = Decoder::Type::Software;
+    decoderParams.stream = stream;
+    decoderParams.logger = m_logger;
+    auto decoder = Decoder::create(decoderParams);
+    m_audioWorker = DecodeWorker::create(audioDecodeParams, std::move(decoder));
+    if (!m_audioWorker) {
+        LOGE("Failed to create Audio DecodeWorker");
+        return false;
+    }
+    // 从已打开的解码上下文取输出参数(比codecpar更准，解码器open时可能修正)；
+    // SwrProcessor对采样率/声道是透传，帧参数即解码器参数，采样格式固定为S16
+    if (const auto* codecCtx = m_audioWorker->codecContext()) {
+        AudioParams params;
+        params.sampleRate = codecCtx->sample_rate;
+        params.channels = codecCtx->ch_layout.nb_channels;
+        params.sampleFormat = IFrame::SampleFormat::S16LE;
+        m_audioParams = params;
+    }
+    return true;
 }
 
 } // namespace controller

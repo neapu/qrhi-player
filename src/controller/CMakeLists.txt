@@ -9,6 +9,10 @@ set(SRC_FILES
     Decoder.cpp
     Packet.h
     Packet.cpp
+    PacketQueue.h
+    PacketQueue.cpp
+    FrameQueue.h
+    FrameQueue.cpp
     Logger.h
     Logger.cpp
     Demuxer.h

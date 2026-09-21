@@ -2,9 +2,6 @@
 #include "ffmpeg_helper/FFmpegError.h"
 
 namespace controller {
-// 时钟策略为false时，允许放行的阈值
-constexpr int64_t CONTROL_CLOCK_THRESHOLD_US = 200000; // 200ms
-
 std::unique_ptr<DecodeWorker> DecodeWorker::create(const Params& params, DecoderPtr&& decoder)
 {
     auto worker = std::unique_ptr<DecodeWorker>(new DecodeWorker());
@@ -32,10 +29,8 @@ bool DecodeWorker::initialize(const Params& params, DecoderPtr&& decoder)
     m_logger = params.logger;
     m_stream = params.stream;
     m_frameProcessors = params.frameProcessors;
-    m_maxPacketQueueDepth = params.maxPacketQueueDepth;
-    m_canDropFrames = params.canDropFrames;
-    m_controlClock = params.controlClock;
-    m_interrupt = params.interrupt;
+    m_packetQueue = params.packetQueue;
+    m_frameQueue = params.frameQueue;
 
     FUNC_TRACE();
 
@@ -43,124 +38,26 @@ bool DecodeWorker::initialize(const Params& params, DecoderPtr&& decoder)
         LOGE("Decoder is not provided.");
         return false;
     }
+    if (!m_packetQueue || !m_frameQueue) {
+        LOGE("Queues are not provided.");
+        return false;
+    }
 
-    m_exitFlag = false;
     m_thread = std::thread(&DecodeWorker::workerFunc, this);
 
     return true;
 }
 
-void DecodeWorker::interrupt()
-{
-    m_packetQueueCV.notify_all();
-}
-
-void DecodeWorker::sendPacket(PacketPtr&& packet)
-{
-    if (!packet) { // 正常流程解封装线程不会传入nullptr
-        LOGE("Received a null packet, this should not happen.");
-        return;
-    }
-    if (m_interrupt && m_interrupt()) {
-        // seek已投递未消费，此包读取自旧位置注定过时，直接丢弃；
-        // 丢弃使sendPacket不再阻塞，解封装线程能尽快回到循环顶部消费seek请求
-        return;
-    }
-    auto serial = packet->serial();
-    if (serial != m_serial.load()) {
-        // 序列号不一样，说明发生了seek，清空包队列
-        m_serial.store(serial);
-        {
-            std::lock_guard<std::mutex> lock(m_packetQueueMutex);
-            m_packetQueue.clear();
-        }
-        {
-            // 唤醒可能因帧队列满而阻塞在本worker帧入队处的解码线程：
-            // serial已变化，其等待谓词判定手中旧帧作废并丢弃
-            std::lock_guard<std::mutex> lock(m_frameQueueMutex);
-            m_frameQueueCV.notify_all();
-        }
-    }
-
-    std::unique_lock<std::mutex> lock(m_packetQueueMutex);
-    if (m_packetQueue.size() >= m_maxPacketQueueDepth) {
-        // 包队列满时阻塞等待水位下降。
-        // 视频消费速度不足的压力由receiveFrame出队侧按主时钟丢帧消化，这里不丢帧：
-        // 包队列压力无法区分"渲染落后"和"解码暂时慢"，在这里丢会误丢不迟到的帧。
-        // interrupt条件保证pending seek能打断阻塞(见Params::interrupt)
-        m_packetQueueCV.wait(lock, [this]() {
-            return m_packetQueue.size() < m_maxPacketQueueDepth || m_exitFlag
-                || (m_interrupt && m_interrupt());
-        });
-        if (m_exitFlag || (m_interrupt && m_interrupt())) {
-            return;
-        }
-    }
-    m_packetQueue.push_back(std::move(packet));
-    m_packetQueueCV.notify_one();
-}
-
-FramePtr DecodeWorker::receiveFrame(int64_t playTimeUs)
-{
-    // 取帧不阻塞，如果队列为空则返回nullptr
-    std::lock_guard<std::mutex> lock(m_frameQueueMutex);
-
-    // 丢帧策略：出队侧按主时钟丢弃。
-    // 若队列中的下一帧也已到期(pts <= playTimeUs)，说明队头帧已被更新的帧覆盖，
-    // 必然不会被显示，直接丢弃。每次调用丢弃0~N帧，数量由实际迟到程度决定，
-    // 与帧率/渲染速度的比例无关；同时保证返回的是"已到期帧中最新的"一帧
-    if (m_canDropFrames) {
-        size_t dropCount = 0;
-        while (m_frameQueue.size() >= 2) {
-            const auto& next = m_frameQueue[1];
-            // End等标记帧不参与丢帧判断，避免误丢结尾最后一帧正常帧
-            if (next->type() != IFrame::FrameType::Normal || next->pts() > playTimeUs) {
-                break;
-            }
-            m_frameQueue.pop_front();
-            ++dropCount;
-        }
-        if (dropCount > 0) {
-            m_droppedFrames.fetch_add(dropCount, std::memory_order_relaxed);
-            m_frameQueueCV.notify_one();
-        }
-    }
-
-    if (m_frameQueue.empty()) {
-        return nullptr;
-    }
-    // 先观察队头帧的pts是否可以放行
-    int64_t pts = m_frameQueue.front()->pts();
-    // 根据时钟策略判断是否放行
-    // 默认postProcessFrame会将pts单位转换为微秒(us)
-    if (m_controlClock) { // 视频模式
-        if (pts > playTimeUs) {
-            // 帧还没到播放时间，返回nullptr
-            return nullptr;
-        }
-    } else { // 音频模式
-        // 只有跳变超过阈值才会被时钟控制
-        if (pts > playTimeUs + CONTROL_CLOCK_THRESHOLD_US) {
-            // 音频帧跳变超过阈值，返回nullptr
-            return nullptr;
-        }
-    }
-
-    // 从帧队列中取出帧
-    std::unique_ptr<Frame> frame = std::move(m_frameQueue.front());
-    m_frameQueue.pop_front();
-    m_frameQueueCV.notify_one();
-
-    return frame;
-}
-
 void DecodeWorker::stop()
 {
-    if (m_exitFlag.exchange(true)) {
-        return;
+    // 先关闭两个队列：既解除本线程在pop/push上的等待，
+    // 也解除解封装线程在包队列满上的阻塞。close()幂等，可重复调用
+    if (m_packetQueue) {
+        m_packetQueue->close();
     }
-    m_packetQueueCV.notify_all();
-    m_frameQueueCV.notify_all();
+    if (m_frameQueue) {
+        m_frameQueue->close();
+    }
     if (m_thread.joinable()) {
         m_thread.join();
     }
@@ -174,35 +71,19 @@ int DecodeWorker::streamIndex() const
 void DecodeWorker::workerFunc()
 {
     FUNC_TRACE();
-    // 解码线程序列号，当与m_serial不一致时，说明发生了seek，需要刷新解码器并清空帧队列
-    int serial = m_serial.load();
-    while (!m_exitFlag) {
+    // 解码线程序列号：取出的包与其不一致时说明发生了seek换代，需要刷新解码器。
+    // 包与帧的代次作废由Controller在seek成功点完成(见Controller::onSeekSucceeded)，
+    // 这里只负责解码器自身的状态
+    int serial = 0;
+    while (true) {
         PacketPtr packet;
-        {
-            std::unique_lock<std::mutex> lock(m_packetQueueMutex);
-            m_packetQueueCV.wait(lock, [this]() {
-                return !m_packetQueue.empty() || m_exitFlag;
-            });
-            if (m_exitFlag) {
-                break;
-            }
-            packet = std::move(m_packetQueue.front());
-            m_packetQueue.pop_front();
-            m_packetQueueCV.notify_one();
-        }
-        if (!packet) { // 正常流程不会走到这里，解封装线程会保证传入的不是nullptr
-            LOGE("Received a null packet, this should not happen.");
-            continue;
+        if (!m_packetQueue->pop(packet)) {
+            break; // 队列已关闭，停止解码线程
         }
 
         // 检查序列号是否一致
         if (packet->serial() != serial) {
-            // 序列号不一致，说明发生了seek，需要刷新解码器并清空帧队列
-            {
-                std::lock_guard<std::mutex> frameLock(m_frameQueueMutex);
-                m_frameQueue.clear();
-                m_frameQueueCV.notify_all();
-            }
+            // 序列号不一致，说明发生了seek，需要刷新解码器
             if (m_decoder) {
                 m_decoder->flush();
             }
@@ -211,19 +92,17 @@ void DecodeWorker::workerFunc()
         bool isEnd = packet->type() == Packet::PacketType::End;
         auto frames = decodePacket(std::move(packet));
         for (auto& f : frames) {
-            std::unique_lock<std::mutex> lock(m_frameQueueMutex);
-            // serial变化(连续seek中又被更新一级)也作为唤醒条件：
-            // 手中旧帧已作废，丢弃并回到取包路径，由下一包触发完整flush
-            m_frameQueueCV.wait(lock, [this, &serial]() {
-                return m_frameQueue.size() < m_maxFrameQueueDepth || m_exitFlag
-                    || serial != m_serial.load();
-            });
-            if (m_exitFlag || serial != m_serial.load()) {
+            auto result = m_frameQueue->push(std::move(f));
+            if (result == FrameQueue::PushResult::Closed) {
+                return; // 队列已关闭，停止解码线程
+            }
+            if (result == FrameQueue::PushResult::StaleRejected) {
+                // 帧属已作废的旧代次：丢弃本包剩余帧，回到取包路径，
+                // 由下一个(新代次的)包触发解码器flush
+                LOGD("Discarded frames of stale serial " << serial << " after seek");
                 break;
             }
-            m_frameQueue.push_back(std::move(f));
             m_decodedFrames++;
-            m_frameQueueCV.notify_all();
         }
         // 补发End帧
         if (isEnd) {
@@ -232,9 +111,12 @@ void DecodeWorker::workerFunc()
                 LOGE("Failed to create end frame");
                 continue;
             }
-            std::unique_lock<std::mutex> lock(m_frameQueueMutex);
-            m_frameQueue.push_back(std::move(endFrame));
-            m_frameQueueCV.notify_all();
+            // 标记帧不受水位限制，避免消费侧停住时"结尾"信号被卡在队满等待里；
+            // StaleRejected表示该End帧属旧代次，seek后不应再交付给消费侧，丢弃即可
+            auto result = m_frameQueue->push(std::move(endFrame), false);
+            if (result == FrameQueue::PushResult::Closed) {
+                return; // 队列已关闭，停止解码线程
+            }
             // 不退出循环，等待seek事件
         }
     }

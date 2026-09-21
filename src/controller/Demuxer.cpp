@@ -74,7 +74,7 @@ bool Demuxer::seek(int streamIndex, int64_t pts)
         LOGE("Input context is not initialized");
         return false;
     }
-    int ret = av_seek_frame(m_inputContext.get(), streamIndex, pts, AVSEEK_FLAG_BACKWARD);
+    int ret = avformat_seek_file(m_inputContext.get(), streamIndex, INT64_MIN, pts, INT64_MAX, AVSEEK_FLAG_BACKWARD);
     if (ret < 0) {
         LOGE("Failed to seek, error code: " << fh::err2str(ret));
         return false;
