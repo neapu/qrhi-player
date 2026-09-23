@@ -4,6 +4,10 @@
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+extern "C" {
+#include <libavutil/log.h>
+}
+
 namespace view {
 spdlog::level::level_enum qtMsgTypeToSpdlogLevel(QtMsgType type)
 {
@@ -20,6 +24,19 @@ spdlog::level::level_enum qtMsgTypeToSpdlogLevel(QtMsgType type)
         return spdlog::level::critical;
     default:
         return spdlog::level::info;
+    }
+}
+
+spdlog::level::level_enum avLogLevelToSpdlogLevel(int level)
+{
+    if (level <= AV_LOG_ERROR) {
+        return spdlog::level::err;
+    } else if (level <= AV_LOG_WARNING) {
+        return spdlog::level::warn;
+    } else if (level <= AV_LOG_INFO) {
+        return spdlog::level::info;
+    } else {
+        return spdlog::level::debug;
     }
 }
 
@@ -80,6 +97,15 @@ void LogManager::initialize()
     spdlog::set_default_logger(m_logger);
 
     qInstallMessageHandler(logQtMessageHandler);
+
+    av_log_set_callback([](void* ptr, int level, const char* fmt, va_list vl) {
+        auto logger = spdlog::default_logger();
+        if (logger) {
+            char buffer[1024];
+            vsnprintf(buffer, sizeof(buffer), fmt, vl);
+            logger->log(avLogLevelToSpdlogLevel(level), buffer);
+        }
+    });
 }
 
 void LogManager::shutdown()
