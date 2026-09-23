@@ -79,6 +79,8 @@ void MediaSource::initializeLogger()
     }
 
     m_logger = createLogger(m_instanceName, m_logDir);
+
+    LOG_INFO(m_logger, "Open media: {}", m_source);
 }
 
 } // namespace media

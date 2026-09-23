@@ -18,9 +18,10 @@ private:
 
 } // namespace media
 
-#define LOG_DEBUG(logger, ...) do { if (logger) logger->debug(__VA_ARGS__); } while(0)
-#define LOG_INFO(logger, ...) do { if (logger) logger->info(__VA_ARGS__); } while(0)
-#define LOG_WARN(logger, ...) do { if (logger) logger->warn(__VA_ARGS__); } while(0)
-#define LOG_ERROR(logger, ...) do { if (logger) logger->error(__VA_ARGS__); } while(0)
-#define LOG_CRITICAL(logger, ...) do { if (logger) logger->critical(__VA_ARGS__); } while(0)
+#define LOG_DEBUG(logger, ...) do { if (logger) logger->log(spdlog::source_loc{__FILE__, __LINE__, ""}, spdlog::level::debug, __VA_ARGS__); } while(0)
+#define LOG_INFO(logger, ...) do { if (logger) logger->log(spdlog::source_loc{__FILE__, __LINE__, ""}, spdlog::level::info, __VA_ARGS__); } while(0)
+#define LOG_WARN(logger, ...) do { if (logger) logger->log(spdlog::source_loc{__FILE__, __LINE__, ""}, spdlog::level::warn, __VA_ARGS__); } while(0)
+#define LOG_ERROR(logger, ...) do { if (logger) logger->log(spdlog::source_loc{__FILE__, __LINE__, ""}, spdlog::level::err, __VA_ARGS__); } while(0)
+#define LOG_CRITICAL(logger, ...) do { if (logger) logger->log(spdlog::source_loc{__FILE__, __LINE__, ""}, spdlog::level::critical, __VA_ARGS__); } while(0)
+
 #define FUNC_TRACE(logger, level) media::FunctionTracer functionTracer(logger, level, __FUNCTION__)
