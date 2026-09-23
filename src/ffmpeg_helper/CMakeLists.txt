@@ -19,6 +19,8 @@ add_library(${LIB_NAME} STATIC
     BufferRef.cpp
 )
 
+target_include_directories(${LIB_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+
 if (WIN32)
     if (NOT DEFINED FFMPEG_DIR OR FFMPEG_DIR STREQUAL "")
         message(FATAL_ERROR "FFMPEG_DIR is not defined. Please set the FFMPEG_DIR environment variable to the path of your FFmpeg installation.")

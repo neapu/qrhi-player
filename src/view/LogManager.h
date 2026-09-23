@@ -1,25 +1,22 @@
 #pragma once
-#include <functional>
-#include <spdlog/spdlog.h>
 #include <QString>
-#include <QtGlobal>
-#include "controller/Controller.h"
+#include <spdlog/spdlog.h>
 
 namespace view {
 class LogManager {
 public:
     static LogManager& instance();
+    static QString logDir();
 
-    void logQtMessage(QtMsgType type, const QMessageLogContext& context, const QString& message);
-    void logControllerMessage(controller::LogLevel level, const std::string& fileName, int line, const std::string& message);
-
-    static void shutdown();
-private:
-    LogManager();
+    void initialize();
+    void shutdown();
 
 private:
-    std::shared_ptr<spdlog::logger> m_mainLogger;
-    std::shared_ptr<spdlog::logger> m_controllerLogger;
+    static void logQtMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg);
+
+private:
+    std::shared_ptr<spdlog::logger> m_logger{nullptr};
 };
+
 
 } // namespace view
