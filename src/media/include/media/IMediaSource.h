@@ -37,10 +37,24 @@ public:
      */
     virtual bool endOfFile() = 0;
 
+    struct VideoParams {
+        int width; // 视频宽度
+        int height; // 视频高度
+        AVPixelFormat pixelFormat; // 像素格式
+        AVRational timeBase; // 时间基
+        AVRational frameRate; // 帧率
+    };
+    /**
+     * @brief 获取视频参数。
+     * @return 如果有视频流，返回视频参数，否则返回空。
+     */
+    virtual std::optional<VideoParams> videoParams() = 0;
+
     struct AudioParams {
         int sampleRate; // 采样率
         int channels; // 通道数
         AVSampleFormat sampleFormat; // 采样格式
+        AVRational timeBase; // 时间基
     };
     /**
      * @brief 获取音频参数。

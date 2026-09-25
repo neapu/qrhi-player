@@ -1,0 +1,342 @@
+#include "VideoRenderer.h"
+#include <QDebug>
+#include <QFile>
+
+extern "C" {
+#include <libavutil/pixfmt.h>
+#include <libavutil/hwcontext.h>
+}
+
+namespace {
+QShader loadShader(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "Failed to open shader file:" << path;
+        return {};
+    }
+    return QShader::fromSerialized(file.readAll());
+}
+
+QString pixelFormatToShaderName(AVPixelFormat pixelFormat)
+{
+    switch (pixelFormat) {
+        case AV_PIX_FMT_YUV420P:
+        case AV_PIX_FMT_YUV420P10LE:
+            return ":/shaders/yuv420p.frag.qsb";
+        case AV_PIX_FMT_NV12:
+        case AV_PIX_FMT_P010LE:
+            return ":/shaders/nv12.frag.qsb";
+        default:
+            return "";
+    }
+}
+
+// 创建顶点变换矩阵，负责保持宽高比
+QMatrix4x4 createVertexTransformMatrix(const QSize& frameSize, const QSize& viewportSize)
+{
+    QMatrix4x4 matrix;
+    if (frameSize.width() <= 0 || frameSize.height() <= 0
+        || viewportSize.width() <= 0 || viewportSize.height() <= 0) {
+        return matrix;
+    }
+
+    const float videoAspect = static_cast<float>(frameSize.width()) / frameSize.height();
+    const float viewportAspect = static_cast<float>(viewportSize.width()) / viewportSize.height();
+    if (viewportAspect > videoAspect) {
+        matrix.scale(videoAspect / viewportAspect, 1.0f);
+    } else {
+        matrix.scale(1.0f, viewportAspect / videoAspect);
+    }
+    return matrix;
+}
+
+// 色彩范围转换矩阵，用于将limited range的YUV转换为full range的RGB
+QMatrix4x4 createColorRangeConversionMatrix(AVColorRange colorRange)
+{
+    static const QMatrix4x4 limitedRange{
+        255.0f / 219.0f, 0.0f,          0.0f,           -16.0f / 219.0f,
+        0.0f,           255.0f / 224.0f, 0.0f,          -128.0f / 224.0f,
+        0.0f,           0.0f,           255.0f / 224.0f, -128.0f / 224.0f,
+        0.0f,           0.0f,           0.0f,            1.0f
+    };
+    static const QMatrix4x4 fullRange{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, -128.0f / 255.0f,
+        0.0f, 0.0f, 1.0f, -128.0f / 255.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+
+    return colorRange == AVCOL_RANGE_JPEG ? fullRange : limitedRange;
+}
+
+// YUV转RGB的转换矩阵
+QMatrix4x4 createYUVtoRGBMatrix(AVColorSpace colorSpace)
+{
+    static const QMatrix4x4 bt601{
+        1.0f,  0.0f,       1.402f,    0.0f,
+        1.0f, -0.344136f, -0.714136f, 0.0f,
+        1.0f,  1.772f,     0.0f,      0.0f,
+        0.0f,  0.0f,       0.0f,      1.0f
+    };
+    static const QMatrix4x4 bt709{
+        1.0f,  0.0f,       1.5748f,   0.0f,
+        1.0f, -0.187324f, -0.468124f, 0.0f,
+        1.0f,  1.8556f,    0.0f,      0.0f,
+        0.0f,  0.0f,       0.0f,      1.0f
+    };
+
+    return colorSpace == AVCOL_SPC_BT709 ? bt709 : bt601;
+}
+
+AVPixelFormat getFrameSwPixelFormat(const fh::FramePtr& frame)
+{
+    if (!frame) return AV_PIX_FMT_NONE;
+    if (!frame->hw_frames_ctx) return static_cast<AVPixelFormat>(frame->format);
+    auto* hwFramesCtx = reinterpret_cast<AVHWFramesContext*>(frame->hw_frames_ctx->data);
+    if (!hwFramesCtx) return static_cast<AVPixelFormat>(frame->format);
+    return hwFramesCtx->sw_format;
+}
+} // namespace
+
+namespace view {
+
+VideoRenderer::VideoRenderer(FrameCallback frameCallback, QWidget *parent)
+    : QRhiWidget(parent)
+    , m_frameCallback(std::move(frameCallback))
+{
+}
+
+VideoRenderer::~VideoRenderer() = default;
+
+void VideoRenderer::clear()
+{
+    m_pipeline.reset();
+    m_shaderResource.reset();
+}
+
+void VideoRenderer::initialize(QRhiCommandBuffer *cb)
+{
+    bool needReinitialize{false};
+    if (m_rhi != rhi()) {
+        m_rhi = rhi();
+        needReinitialize = true;
+    }
+    if (!needReinitialize){
+        return;
+    }
+
+    qInfo() << "Initializing QRhiVideoRenderer with new QRhi instance.";
+    qInfo() << "Using QRhi backend:" << m_rhi->backendName();
+
+#ifdef _WIN32
+    if (m_rhi->backend() == QRhi::D3D11) {
+        auto* nativeHandle = reinterpret_cast<const QRhiD3D11NativeHandles*>(m_rhi->nativeHandles());
+        if (!nativeHandle) {
+            qCritical() << "Failed to obtain D3D11 native handles.";
+            emit errorOccurred("Failed to obtain D3D11 native handles.");
+            return;
+        }
+        auto* device = static_cast<ID3D11Device*>(nativeHandle->dev);
+        auto* context = static_cast<ID3D11DeviceContext*>(nativeHandle->context);
+        
+        // 启用多线程支持
+        Microsoft::WRL::ComPtr<ID3D10Multithread> mt;
+        if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&mt)))) {
+            mt->SetMultithreadProtected(TRUE);
+            m_d3d11Device = device;
+            m_d3d11DeviceContext = context;
+        } else {
+            // 回退到渲染软件帧模式，不赋值m_d3d11Device和m_d3d11DeviceContext
+            qWarning() << "Failed to enable multithread protection for D3D11 device. Falling back to software rendering mode.";
+        }
+    }
+#endif
+
+    // 纹理坐标原点在左上角，而QRhi的默认坐标原点在左下角，所以需要翻转v坐标
+    const float vertexData[] = {
+        // x, y, u, v
+        -1.0f, -1.0f, 0.0f, 1.0f, // bottom-left
+        1.0f, -1.0f, 1.0f, 1.0f,  // bottom-right
+        -1.0f, 1.0f, 0.0f, 0.0f,  // top-left
+        1.0f, 1.0f, 1.0f, 0.0f    // top-right
+    };
+    m_vertexBuffer.reset(m_rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(vertexData)));
+    if (!m_vertexBuffer->create()) {
+        qWarning() << "Failed to create vertex buffer.";
+        m_vertexBuffer.reset();
+        m_rhi = nullptr;
+        emit errorOccurred("Failed to create vertex buffer.");
+        return;
+    }
+
+    // 上传顶点数据到GPU
+    auto* rub = m_rhi->nextResourceUpdateBatch();
+    rub->uploadStaticBuffer(m_vertexBuffer.get(), vertexData);
+    cb->resourceUpdate(rub);
+
+    qInfo() << "QRhiVideoRenderer initialized.";
+    emit initialized();
+}
+
+void VideoRenderer::render(QRhiCommandBuffer *cb)
+{
+    if (!m_rhi) return;
+
+    if (!m_frameCallback) {
+        qCritical() << "Frame callback is not set.";
+        return;
+    }
+
+    auto frame = m_frameCallback();
+
+    auto* rub = m_rhi->nextResourceUpdateBatch();
+    if (frame) {
+        updatePipeline(rub, std::move(frame));
+    }
+
+    if (m_pipeline && m_shaderResource) {
+        cb->beginPass(renderTarget(), QColor{0,0,0,255}, QRhiDepthStencilClearValue{1.0f, 0}, rub);
+        cb->setGraphicsPipeline(m_pipeline.get());
+        cb->setShaderResources(m_shaderResource->shaderResourceBindings());
+        auto renderSize = renderTarget()->pixelSize();
+        cb->setViewport({0.0f, 0.0f, static_cast<float>(renderSize.width()), static_cast<float>(renderSize.height())});
+        const QRhiCommandBuffer::VertexInput vertexInput[] {
+            { m_vertexBuffer.get(), 0 }
+        };
+        cb->setVertexInput(0, 1, vertexInput);
+        cb->draw(4); // 绘制四个顶点的矩形
+        cb->endPass();
+    } else {
+        cb->beginPass(renderTarget(), QColor{0,0,0,255}, QRhiDepthStencilClearValue{1.0f, 0}, rub);
+        cb->endPass();
+    }
+    update(); // 保持垂直同步
+}
+
+void VideoRenderer::releaseResources()
+{
+    m_pipeline.reset();
+    m_shaderResource.reset();
+    m_vertexBuffer.reset();
+#ifdef _WIN32
+    m_d3d11Device = nullptr;
+    m_d3d11DeviceContext = nullptr;
+#endif
+    m_rhi = nullptr;
+    QRhiWidget::releaseResources();
+}
+
+void VideoRenderer::updatePipeline(QRhiResourceUpdateBatch* rub, fh::FramePtr&& frame)
+{
+    createPipeline(frame);
+    if (!m_pipeline || !m_shaderResource) {
+        qWarning() << "Failed to create pipeline or shader resource.";
+        return;
+    }
+
+    QSize renderSize = renderTarget()->pixelSize();
+    QSize frameSize{frame->width, frame->height};
+    QMatrix4x4 vertexTransformMatrix = createVertexTransformMatrix(frameSize, renderSize);
+    QMatrix4x4 colorRangeConversionMatrix = createColorRangeConversionMatrix(frame->color_range);
+    QMatrix4x4 yuvToRGBMatrix = createYUVtoRGBMatrix(frame->colorspace);
+
+    m_shaderResource->updateTexture(rub, frame);
+    m_shaderResource->updateVertexTransformMatrix(rub, vertexTransformMatrix);
+    m_shaderResource->updateColorRangeConversionMatrix(rub, colorRangeConversionMatrix);
+    m_shaderResource->updateYUVtoRGBMatrix(rub, yuvToRGBMatrix);
+}
+
+void VideoRenderer::createPipeline(const fh::FramePtr& frame)
+{
+    if (!frame) return;
+    ShaderResource::Type type{ShaderResource::Type::Unknown};
+    switch (frame->format) {
+        case AV_PIX_FMT_YUV420P:
+        case AV_PIX_FMT_YUV420P10LE:
+        case AV_PIX_FMT_NV12:
+        case AV_PIX_FMT_P010LE:
+            type = ShaderResource::Type::Yuv;
+            break;
+        case AV_PIX_FMT_D3D11:
+            type = ShaderResource::Type::D3D11;
+            break;
+        default:
+            type = ShaderResource::Type::Unknown;
+            break;
+    };
+    QSize frameSize{frame->width, frame->height};
+    auto swPixelFormat = getFrameSwPixelFormat(frame);
+    if (swPixelFormat == AV_PIX_FMT_NONE) {
+        qWarning() << "Failed to get software pixel format for frame.";
+        return;
+    }
+    if (m_pipeline
+        && m_pipeline->renderPassDescriptor() == renderTarget()->renderPassDescriptor()
+        && m_shaderResource
+        && m_shaderResource->size() == frameSize
+        && m_shaderResource->type() == type
+        && m_shaderResource->swPixelFormat() == swPixelFormat
+    ) {
+        return;
+    }
+
+    m_pipeline.reset();
+    m_shaderResource.reset();
+
+    ShaderResource::Params params;
+    params.type = type;
+    params.rhi = m_rhi;
+    params.size = frameSize;
+#ifdef _WIN32
+    params.d3d11Device = m_d3d11Device;
+    params.d3d11DeviceContext = m_d3d11DeviceContext;
+#endif
+    params.swPixelFormat = swPixelFormat;
+    m_shaderResource = ShaderResource::create(params);
+    if (!m_shaderResource) {
+        qWarning() << "Failed to create shader resource.";
+        return;
+    }
+
+    auto vertexShader = loadShader(":/shaders/video.vert.qsb");
+    auto fragmentShader = loadShader(pixelFormatToShaderName(swPixelFormat));
+    if (!vertexShader.isValid() || !fragmentShader.isValid()) {
+        qWarning() << "Failed to load shaders.";
+        m_shaderResource.reset();
+        return;
+    }
+
+    // 顶点布局(类似OpenGL中的VAO)
+    QRhiVertexInputLayout inputLayout{};
+    inputLayout.setBindings({
+        { sizeof(float) * 4 }   // 本项目只用了一个顶点缓冲区，同时描述顶点位置和纹理坐标，每个顶点共4个float
+    });
+    inputLayout.setAttributes({
+        // 第一个参数表示绑定的顶点缓冲区的索引，因为只有一个顶点缓冲区，这里都设置为0
+        // 第二个参数表示顶点着色器中对应的输入变量的位置(location)，这里假设顶点着色器中有两个输入变量，位置和纹理坐标，分别对应location 0和1
+        // 第三个参数表示顶点属性的格式，这里使用Float2表示两个float组成的向量
+        // 第四个参数表示顶点属性在顶点缓冲区中的偏移量，这里顶点位置在缓冲区的起始位置，所以偏移为0，纹理坐标在顶点位置之后，所以偏移为sizeof(float) * 2
+        { 0, 0, QRhiVertexInputAttribute::Float2, 0 }, // 顶点位置
+        { 0, 1, QRhiVertexInputAttribute::Float2, sizeof(float) * 2 } // 纹理坐标
+    });
+
+    m_pipeline.reset(m_rhi->newGraphicsPipeline());
+    m_pipeline->setVertexInputLayout(inputLayout);
+    m_pipeline->setShaderStages({
+        { QRhiShaderStage::Vertex, vertexShader },
+        { QRhiShaderStage::Fragment, fragmentShader }
+    });
+    m_pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    m_pipeline->setShaderResourceBindings(m_shaderResource->shaderResourceBindings());
+    // 绘制条带三角形，用四个顶点渲染两个三角形
+    m_pipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    if (!m_pipeline->create()) {
+        qWarning() << "Failed to create graphics pipeline.";
+        m_shaderResource.reset();
+        m_pipeline.reset();
+        return;
+    }
+}
+
+} // namespace view

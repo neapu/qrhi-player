@@ -14,7 +14,11 @@ qt_add_executable(${EXE_NAME}
     LogManager.cpp
 )
 
-target_link_libraries(${EXE_NAME} PRIVATE Qt6::Core Qt6::Widgets Media spdlog)
+add_subdirectory(video_renderer)
+add_subdirectory(audio_renderer)
+
+target_link_libraries(${EXE_NAME} PRIVATE Qt6::Core Qt6::Widgets Media spdlog video_renderer audio_renderer)
+
 
 if (WIN32)
     # Debug 配置为控制台应用程序，方便调试；Release 保持 GUI 程序。

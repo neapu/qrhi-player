@@ -1,0 +1,176 @@
+#include "DemuxWorker.h"
+
+namespace {
+constexpr auto TARGET_QUEUE_DURATION = 5; // in seconds
+
+size_t targetQueueSize(AVFormatContext* fmtCtx, AVStream* stream, media::LoggerPtr logger)
+{
+    if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+        // 目标时长的包数量 = 目标时长 * 采样率 / 每个音频帧的采样数
+        auto sampleRate = stream->codecpar->sample_rate;
+        sampleRate = sampleRate > 0 ? sampleRate : 48000; // 如果采样率无效，使用默认值 48000 Hz
+        auto frameSize = stream->codecpar->frame_size;
+        frameSize = frameSize > 0 ? frameSize : 4096; // 如果帧大小无效，使用默认值 4096
+        return TARGET_QUEUE_DURATION * sampleRate / frameSize;
+    } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        // 目标时长的包数量 = 目标时长 * 帧率
+        auto frameRate = av_guess_frame_rate(fmtCtx, stream, nullptr);
+        if (frameRate.num == 0) {
+            frameRate = {60, 1}; // 必须有兜底，按大的来
+            LOG_WARN(logger, "Failed to guess frame rate, using default 60 fps");
+        }
+        return TARGET_QUEUE_DURATION * frameRate.num / frameRate.den; 
+    }
+    return 0;
+}
+
+void setPacketSerial(fh::PacketPtr& packet, int serial)
+{
+    if (packet) {
+        packet->opaque = reinterpret_cast<void*>(static_cast<intptr_t>(serial));
+    }
+}
+
+
+}
+
+namespace media {
+std::unique_ptr<DemuxWorker> DemuxWorker::create(const Params& params, DemuxerPtr&& demuxer)
+{
+    auto worker = std::unique_ptr<DemuxWorker>(new DemuxWorker(params, std::move(demuxer)));
+    if (worker->initialize()) {
+        return worker;
+    }
+    return nullptr;
+}
+
+DemuxWorker::DemuxWorker(const Params& params, DemuxerPtr&& demuxer)
+    : m_logger(params.logger),
+      m_mainStreamIndex(params.mainStreamIndex),
+      m_demuxer(std::move(demuxer))
+{
+}
+
+bool DemuxWorker::initialize()
+{
+    FUNC_TRACE(m_logger, spdlog::level::info);
+    if (!m_demuxer) {
+        LOG_ERROR(m_logger, "Demuxer is empty");
+        return false;
+    }
+
+    uint32_t streamCount = m_demuxer->streamCount();
+    for (uint32_t i = 0; i < streamCount; ++i) {
+        auto stream = m_demuxer->stream(i);
+        auto queueSize = targetQueueSize(m_demuxer->formatContext(), stream, m_logger);
+        if (queueSize == 0) continue;
+        bool dropOldest = m_mainStreamIndex != i;
+        // PacketQueue 含 mutex/condition_variable，不可拷贝也不可移动，
+        // 必须用 try_emplace 就地构造
+        m_packetQueues.try_emplace(i, queueSize, dropOldest);
+    }
+
+    return true;
+}
+
+void DemuxWorker::interruptMainStreamQueue()
+{
+    if (m_packetQueues.contains(m_mainStreamIndex)) {
+        m_packetQueues.at(m_mainStreamIndex).interrupt();
+    } else {
+        LOG_WARN(m_logger, "Main stream index {} not found in packet queues", m_mainStreamIndex);
+    }
+}
+
+void DemuxWorker::workerThread()
+{
+    if (!m_demuxer) {
+        LOG_ERROR(m_logger, "Demuxer is empty");
+        return;
+    }
+    while (!m_exitFlag) {
+        int64_t seekTargetUs{AV_NOPTS_VALUE};
+        {
+            std::unique_lock<std::mutex> lock(m_seekMutex);
+            seekTargetUs = m_seekTargetUs;
+            m_seekTargetUs = AV_NOPTS_VALUE;
+        }
+        if (seekTargetUs != AV_NOPTS_VALUE) {
+            if (m_demuxer->seek(seekTargetUs)) {
+                clearAllPacketQueues();
+                m_serial++;
+                m_endOfFile = false;
+            }
+        }
+        auto packet = m_demuxer->readPacket();
+        if (!packet) {
+            if (m_demuxer->endOfFile()) {
+                m_endOfFile = true;
+                // 等待 seek 请求
+                std::unique_lock<std::mutex> lock(m_seekMutex);
+                m_seekCV.wait(lock, [this] { return m_seekTargetUs != AV_NOPTS_VALUE || m_exitFlag; });
+            }
+            continue;
+        }
+        setPacketSerial(packet, m_serial);
+        if (m_packetQueues.contains(packet->stream_index)) {
+            m_packetQueues.at(packet->stream_index).push(std::move(packet));
+        } else {
+            LOG_WARN(m_logger, "Stream index {} not found in packet queues", packet->stream_index);
+        }
+    }
+}
+
+void DemuxWorker::clearAllPacketQueues()
+{
+    for (auto& [index, queue] : m_packetQueues) {
+        queue.clear();
+    }
+}
+
+void DemuxWorker::start()
+{
+    m_exitFlag = false;
+    m_workerThread = std::thread(&DemuxWorker::workerThread, this);
+}
+
+void DemuxWorker::stop()
+{
+    m_exitFlag = true;
+    m_seekCV.notify_all();
+    interruptMainStreamQueue();
+    clearAllPacketQueues();
+    if (m_workerThread.joinable()) {
+        m_workerThread.join();
+    }
+}
+
+fh::PacketPtr DemuxWorker::nextPacket(uint32_t streamIndex)
+{
+    if (m_packetQueues.contains(streamIndex)) {
+        return m_packetQueues.at(streamIndex).pop();
+    }
+    LOG_WARN(m_logger, "Stream index {} not found in packet queues", streamIndex);
+    return nullptr;
+}
+
+void DemuxWorker::seek(int64_t us)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_seekMutex);
+        m_seekTargetUs = us;
+    }
+    m_seekCV.notify_all();
+    interruptMainStreamQueue();
+}
+
+bool DemuxWorker::streamQueueEmpty(uint32_t streamIndex) const
+{
+    if (m_packetQueues.contains(streamIndex)) {
+        return m_packetQueues.at(streamIndex).empty();
+    }
+    LOG_WARN(m_logger, "Stream index {} not found in packet queues", streamIndex);
+    return true;
+}
+
+} // namespace media
