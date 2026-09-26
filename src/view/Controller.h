@@ -33,6 +33,8 @@ private:
     int64_t clockUsLocked() const;
     void reanchorClockLocked(int64_t newAnchorMediaUs);
 
+    void endOfFile();
+
 private:
     media::MediaSourcePtr m_mediaSource{nullptr};
 

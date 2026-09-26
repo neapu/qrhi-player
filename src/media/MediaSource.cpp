@@ -45,11 +45,6 @@ MediaSource::MediaSource(const IMediaSource::Params& params)
 
 MediaSource::~MediaSource()
 {
-    if (m_logger) {
-        m_logger->flush();
-        spdlog::drop(m_instanceName);
-    }
-    
     if (m_videoDecodeWorker) {
         m_videoDecodeWorker->stop();
     }
@@ -58,6 +53,11 @@ MediaSource::~MediaSource()
     }
     if (m_demuxWorker) {
         m_demuxWorker->stop();
+    }
+
+    if (m_logger) {
+        m_logger->flush();
+        spdlog::drop(m_instanceName);
     }
 }
 
@@ -78,14 +78,15 @@ bool MediaSource::initialize()
     m_duration = demuxer->duration();
 
     auto streamCount = demuxer->streamCount();
+    // 现在先选择第一个视频流和第一个音频流
     for (uint32_t i = 0; i < streamCount; ++i) {
         auto stream = demuxer->stream(i);
-        if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && !m_audioDecodeWorker) {
             if (!initializeAudio(stream)) {
                 LOG_ERROR(m_logger, "Failed to initialize audio stream at index {}", i);
                 return false;
             }
-        } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        } else if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && !m_videoDecodeWorker) {
             if (!initializeVideo(stream)) {
                 LOG_ERROR(m_logger, "Failed to initialize video stream at index {}", i);
                 return false;

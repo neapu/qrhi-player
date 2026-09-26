@@ -18,6 +18,11 @@ D3D11ShaderResource::D3D11ShaderResource(const Params& params)
 
 bool D3D11ShaderResource::initializeResources()
 {
+    if (!m_d3d11Device || !m_d3d11DeviceContext) {
+        qCritical() << "D3D11 device or device context is null";
+        return false;
+    }
+
     qInfo() << "Initializing D3D11ShaderResource";
     if (m_textureFormat == DXGI_FORMAT_UNKNOWN) {
         qCritical() << "Unsupported texture format";

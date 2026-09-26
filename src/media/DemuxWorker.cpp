@@ -132,7 +132,9 @@ void DemuxWorker::workerThread()
             readErrorCount++;
             if (readErrorCount >= MAX_READ_ERROR_COUNT) {
                 LOG_ERROR(m_logger, "Too many consecutive read errors, exiting demux loop");
-                break;
+                m_endOfFile = true;
+                std::unique_lock<std::mutex> lock(m_seekMutex);
+                m_seekCV.wait(lock, [this] { return m_seekTargetUs != AV_NOPTS_VALUE || m_exitFlag; });
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;

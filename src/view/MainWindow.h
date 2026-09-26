@@ -1,5 +1,7 @@
 #pragma once
 #include <QMainWindow>
+#include <QSlider>
+#include <QPushButton>
 #include "Controller.h"
 #include "video_renderer/VideoRenderer.h"
 

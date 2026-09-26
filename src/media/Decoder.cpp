@@ -64,10 +64,11 @@ bool Decoder::openCodec(const AVStream* stream)
 bool Decoder::sendPacket(fh::PacketPtr&& packet)
 {
     int ret = avcodec_send_packet(m_codecCtx.get(), packet.get());
-    if (ret < 0) {
+    if (ret < 0 && ret != AVERROR(EAGAIN)) {
         LOG_ERROR(m_logger, "Failed to send packet: {}", fh::err2str(ret));
+        return false;
     }
-    return ret >= 0;
+    return true;
 }
 
 std::expected<fh::FramePtr, int> Decoder::receiveFrame()

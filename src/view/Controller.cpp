@@ -24,6 +24,7 @@ int64_t framePtsUs(const fh::FramePtr& frame, AVRational timeBase)
     }
     auto tb = frame->time_base.num != 0 ? frame->time_base : timeBase;
     int64_t pts = frame->pts;
+    if (pts == AV_NOPTS_VALUE) return AV_NOPTS_VALUE;
     return av_rescale_q(pts, tb, AVRational{1, 1'000'000});
 }
 
@@ -62,6 +63,14 @@ void Controller::reanchorClockLocked(int64_t newAnchorMediaUs)
 {
     m_clock.anchorMediaUs = newAnchorMediaUs;
     m_clock.anchorWallUs = steadyClockUs();
+}
+
+void Controller::endOfFile()
+{
+    // 可能从音频线程触发，要切换到GUI线程
+    QMetaObject::invokeMethod(this, [this]() {
+        closeFile();
+    }, Qt::QueuedConnection);
 }
 
 void Controller::openFile(const QString& filePath)
@@ -104,7 +113,7 @@ void Controller::openFile(const QString& filePath)
             // 未知帧率时，兜底按照10fps算
             m_videoFrameDurationUs = 1000000 / 10;
         }
-        m_videoFrameDurationUs += 2000; // 加一点容错
+        m_videoFrameDurationUs;
         m_videoTimeBase = videoParams->timeBase;
     }
 
@@ -129,6 +138,13 @@ void Controller::closeFile()
     m_pendingVideoFrame.reset();
     m_pendingAudioFrame.reset();
     m_mediaSource.reset();
+    {
+        QMutexLocker locker(&m_clock.mutex);
+        m_clock.anchorWallUs = 0;
+        m_clock.anchorMediaUs = 0;
+        m_clock.pausedMediaUs = 0;
+        m_clock.paused = false;
+    }
 }
 
 fh::FramePtr Controller::nextVideoFrame()
@@ -145,6 +161,9 @@ fh::FramePtr Controller::nextVideoFrame()
             m_pendingVideoFrame = m_mediaSource->nextVideoFrame();
         }
         if (!m_pendingVideoFrame) {
+            if (m_mediaSource->endOfFile()) {
+                endOfFile();
+            }
             return nullptr;
         }
 
@@ -160,7 +179,12 @@ fh::FramePtr Controller::nextVideoFrame()
         reanchorClockLocked(mediaUs);
         // 如果pts早于媒体时间超过持续时间，这一帧需要丢弃
         int64_t ptsUs = framePtsUs(m_pendingVideoFrame, m_videoTimeBase);
-        if (ptsUs + m_videoFrameDurationUs < mediaUs) {
+        if (ptsUs == AV_NOPTS_VALUE) {
+            // TODO: 针对无PTS视频帧，可能需要根据帧率或其他信息生成PTS，以后再处理
+            return std::exchange(m_pendingVideoFrame, nullptr);
+        }
+        auto frameDurationUs = m_videoFrameDurationUs + 2000; // 加一点容错
+        if (ptsUs + frameDurationUs < mediaUs) {
             m_pendingVideoFrame.reset();
             continue;
         }
@@ -186,6 +210,9 @@ fh::FramePtr Controller::nextAudioFrame()
             m_pendingAudioFrame = m_mediaSource->nextAudioFrame();
         }
         if (!m_pendingAudioFrame) {
+            if (m_mediaSource->endOfFile()) {
+                endOfFile();
+            }
             return nullptr;
         }
 
