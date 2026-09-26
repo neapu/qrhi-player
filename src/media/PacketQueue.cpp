@@ -48,6 +48,7 @@ void PacketQueue::interrupt()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
     m_interrupted = true;
+    m_nonFullCV.notify_all();
 }
 
 bool PacketQueue::empty() const

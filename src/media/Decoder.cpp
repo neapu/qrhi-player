@@ -44,6 +44,7 @@ bool Decoder::createContext(const AVStream* stream)
         return false;
     }
     m_codecCtx->time_base = stream->time_base;
+    m_codecCtx->pkt_timebase = stream->time_base;
     return true;
 }
 
@@ -121,16 +122,7 @@ const AVChannelLayout& Decoder::chLayout() const
 
 AVRational Decoder::timeBase() const
 {
-    if (!m_codecCtx) {
-        return AVRational{0, 1};
-    }
-    if (m_codecCtx->time_base.num != 0) {
-        return m_codecCtx->time_base;
-    }
-    if (!m_stream) {
-        return AVRational{0, 1};
-    }
-    return m_stream->time_base;
+    return m_stream ? m_stream->time_base : AVRational{0, 1};
 }
 
 AVRational Decoder::frameRate() const

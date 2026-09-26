@@ -51,7 +51,7 @@ private:
     fh::FramePtr m_pendingVideoFrame{nullptr};
 
     bool m_hasVideo{false};
-    bool m_hasAudio{false};
+    std::atomic_bool m_hasAudio{false};
 
     int64_t m_videoFrameDurationUs{0};
     AVRational m_videoTimeBase{0, 1};

@@ -75,6 +75,7 @@ bool MediaSource::initialize()
         LOG_ERROR(m_logger, "Failed to create demuxer");
         return false;
     }
+    m_duration = demuxer->duration();
 
     auto streamCount = demuxer->streamCount();
     for (uint32_t i = 0; i < streamCount; ++i) {
@@ -106,15 +107,35 @@ bool MediaSource::initialize()
         LOG_ERROR(m_logger, "Failed to create demux worker");
         return false;
     }
-    
+
+    // 工作线程延后到 start() 启动：主流的选择依赖音频渲染器的创建结果
+    return true;
+}
+
+void MediaSource::start(bool audioAvailable)
+{
+    FUNC_TRACE(m_logger, spdlog::level::info);
+
+    if (m_started) {
+        LOG_WARN(m_logger, "start called twice, ignored");
+        return;
+    }
+
+    // 音频没有消费端（如音频设备打开失败）时不启动音频解码线程，
+    // 并改选视频流为主流，否则无人消费的音频队列会阻塞整个解封装链路
+    m_audioActive = audioAvailable && m_audioDecodeWorker;
+    if (!m_audioActive && m_videoDecodeWorker) {
+        m_demuxWorker->setMainStream(m_videoDecodeWorker->streamIndex());
+    }
+
     m_demuxWorker->start();
     if (m_videoDecodeWorker) {
         m_videoDecodeWorker->start();
     }
-    if (m_audioDecodeWorker) {
+    if (m_audioActive) {
         m_audioDecodeWorker->start();
     }
-    return true;
+    m_started = true;
 }
 
 fh::FramePtr MediaSource::nextVideoFrame()
@@ -131,9 +152,10 @@ bool MediaSource::endOfFile()
 {
     bool endOfFile = m_demuxWorker ? m_demuxWorker->endOfFile() : true;
     bool videoFrameQueueEmpty = m_videoDecodeWorker ? m_videoDecodeWorker->queueEmpty() : true;
-    bool audioFrameQueueEmpty = m_audioDecodeWorker ? m_audioDecodeWorker->queueEmpty() : true;
+    // 音频未启用时其包队列只进不出，不能参与判定
+    bool audioFrameQueueEmpty = m_audioActive && m_audioDecodeWorker ? m_audioDecodeWorker->queueEmpty() : true;
     bool videoPacketQueueEmpty = m_demuxWorker && m_videoDecodeWorker ? m_demuxWorker->streamQueueEmpty(m_videoDecodeWorker->streamIndex()) : true;
-    bool audioPacketQueueEmpty = m_demuxWorker && m_audioDecodeWorker ? m_demuxWorker->streamQueueEmpty(m_audioDecodeWorker->streamIndex()) : true;
+    bool audioPacketQueueEmpty = m_audioActive && m_demuxWorker && m_audioDecodeWorker ? m_demuxWorker->streamQueueEmpty(m_audioDecodeWorker->streamIndex()) : true;
     return videoFrameQueueEmpty && audioFrameQueueEmpty && videoPacketQueueEmpty && audioPacketQueueEmpty && endOfFile;
 }
 

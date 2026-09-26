@@ -26,6 +26,11 @@ bool Demuxer::initialize()
         LOG_ERROR(m_logger, "Failed to create input context, error: {}", fh::err2str(err));
         return false;
     }
+    int err = avformat_find_stream_info(ret.value().get(), nullptr);
+    if (err < 0) {
+        LOG_ERROR(m_logger, "Failed to find stream info, error: {}", fh::err2str(err));
+        return false;
+    }
 
     m_inputContext = std::move(ret.value());
     return true;

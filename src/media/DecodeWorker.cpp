@@ -63,6 +63,7 @@ void DecodeWorker::seekRequired()
 {
     std::unique_lock<std::mutex> lock(m_frameQueueMutex);
     m_seekRequired = true;
+    m_frameQueueNotFullCV.notify_all();
 }
 
 uint32_t DecodeWorker::streamIndex() const

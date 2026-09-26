@@ -21,6 +21,16 @@ public:
     virtual ~IMediaSource() = default;
 
     /**
+     * @brief 启动内部工作线程（解封装、解码）。create 之后必须调用一次，
+     *        之后 nextVideoFrame/nextAudioFrame 才会产出数据。
+     * @param audioAvailable 是否存在音频消费端（音频渲染器是否创建成功）。
+     *        为 false 时：若文件有视频流，视频流成为主流且音频解码线程不启动
+     *        （音频设备打开失败时降级为无声视频播放）；
+     *        若文件无视频流则仍以音频流为主流。
+     */
+    virtual void start(bool audioAvailable) = 0;
+
+    /**
      * @brief 获取下一个视频帧。消费操作。
      * @return 下一个视频帧，如果没有则返回空。
      */

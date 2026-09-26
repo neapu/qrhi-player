@@ -2,6 +2,7 @@
 
 namespace {
 constexpr auto TARGET_QUEUE_DURATION = 5; // in seconds
+constexpr auto MAX_READ_ERROR_COUNT = 10;
 
 size_t targetQueueSize(AVFormatContext* fmtCtx, AVStream* stream, media::LoggerPtr logger)
 {
@@ -59,6 +60,14 @@ bool DemuxWorker::initialize()
         return false;
     }
 
+    createPacketQueues();
+
+    return true;
+}
+
+void DemuxWorker::createPacketQueues()
+{
+    m_packetQueues.clear();
     uint32_t streamCount = m_demuxer->streamCount();
     for (uint32_t i = 0; i < streamCount; ++i) {
         auto stream = m_demuxer->stream(i);
@@ -69,8 +78,17 @@ bool DemuxWorker::initialize()
         // 必须用 try_emplace 就地构造
         m_packetQueues.try_emplace(i, queueSize, dropOldest);
     }
+}
 
-    return true;
+void DemuxWorker::setMainStream(uint32_t streamIndex)
+{
+    if (m_started) {
+        LOG_WARN(m_logger, "setMainStream must be called before start, ignored");
+        return;
+    }
+    m_mainStreamIndex = streamIndex;
+    // 队列策略由主流派生，start 之前队列为空且无线程访问，直接重建
+    createPacketQueues();
 }
 
 void DemuxWorker::interruptMainStreamQueue()
@@ -88,6 +106,7 @@ void DemuxWorker::workerThread()
         LOG_ERROR(m_logger, "Demuxer is empty");
         return;
     }
+    int readErrorCount = 0;
     while (!m_exitFlag) {
         int64_t seekTargetUs{AV_NOPTS_VALUE};
         {
@@ -110,6 +129,12 @@ void DemuxWorker::workerThread()
                 std::unique_lock<std::mutex> lock(m_seekMutex);
                 m_seekCV.wait(lock, [this] { return m_seekTargetUs != AV_NOPTS_VALUE || m_exitFlag; });
             }
+            readErrorCount++;
+            if (readErrorCount >= MAX_READ_ERROR_COUNT) {
+                LOG_ERROR(m_logger, "Too many consecutive read errors, exiting demux loop");
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
         setPacketSerial(packet, m_serial);
@@ -131,6 +156,7 @@ void DemuxWorker::clearAllPacketQueues()
 void DemuxWorker::start()
 {
     m_exitFlag = false;
+    m_started = true;
     m_workerThread = std::thread(&DemuxWorker::workerThread, this);
 }
 

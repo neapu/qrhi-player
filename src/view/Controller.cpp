@@ -22,8 +22,9 @@ int64_t framePtsUs(const fh::FramePtr& frame, AVRational timeBase)
     if (!frame) {
         return 0;
     }
+    auto tb = frame->time_base.num != 0 ? frame->time_base : timeBase;
     int64_t pts = frame->pts;
-    return av_rescale_q(pts, timeBase, AVRational{1, 1'000'000});
+    return av_rescale_q(pts, tb, AVRational{1, 1'000'000});
 }
 
 }
@@ -77,6 +78,15 @@ void Controller::openFile(const QString& filePath)
         return;
     }
 
+    {
+        QMutexLocker locker(&m_clock.mutex);
+        m_clock.anchorWallUs = steadyClockUs();
+        m_clock.anchorMediaUs = 0;
+        m_clock.pausedMediaUs = 0;
+        m_clock.paused = false;
+    }
+
+    // 先创建渲染器再启动管线：音频设备是否可用决定 MediaSource 选用哪条流作为主流
     auto audioParams = m_mediaSource->audioParams();
     if (audioParams) {
         createAudioRenderer(*audioParams);
@@ -84,22 +94,28 @@ void Controller::openFile(const QString& filePath)
     } else {
         m_hasAudio = false;
     }
+
     // 根据帧率估算一帧视频帧的持续时间
     auto videoParams = m_mediaSource->videoParams();
+    m_hasVideo = videoParams.has_value();
     if (videoParams) {
         m_videoFrameDurationUs = frameDurationUs(videoParams->frameRate);
+        if (m_videoFrameDurationUs == 0) {
+            // 未知帧率时，兜底按照10fps算
+            m_videoFrameDurationUs = 1000000 / 10;
+        }
+        m_videoFrameDurationUs += 2000; // 加一点容错
         m_videoTimeBase = videoParams->timeBase;
-        m_hasVideo = true;
-    } else {
-        m_hasVideo = false;
     }
 
-    {
-        QMutexLocker locker(&m_clock.mutex);
-        m_clock.anchorWallUs = steadyClockUs();
-        m_clock.anchorMediaUs = 0;
-        m_clock.pausedMediaUs = 0;
+    // 纯音频文件且音频设备不可用，没有任何流可以消费
+    if (!m_hasVideo && !m_hasAudio) {
+        qCritical() << "Audio-only media but audio device unavailable:" << filePath;
+        closeFile();
+        return;
     }
+
+    m_mediaSource->start(m_hasAudio);
 }
 
 void Controller::closeFile()
@@ -110,6 +126,8 @@ void Controller::closeFile()
     m_videoFrameDurationUs = 0;
     m_videoTimeBase = AVRational{0, 1};
     m_hasVideo = false;
+    m_pendingVideoFrame.reset();
+    m_pendingAudioFrame.reset();
     m_mediaSource.reset();
 }
 
@@ -188,6 +206,7 @@ fh::FramePtr Controller::nextAudioFrame()
         int64_t frameDurationUs = static_cast<int64_t>(
             static_cast<double>(m_pendingAudioFrame->nb_samples) /
             m_pendingAudioFrame->sample_rate * 1000000);
+        frameDurationUs += 2000; // 加一点容错
         if (ptsUs + frameDurationUs < mediaUs) {
             m_pendingAudioFrame.reset();
             continue;

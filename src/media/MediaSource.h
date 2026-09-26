@@ -11,6 +11,8 @@ public:
 
     virtual ~MediaSource();
 
+    void start(bool audioAvailable) override;
+
     fh::FramePtr nextVideoFrame() override;
     fh::FramePtr nextAudioFrame() override;
     bool endOfFile() override;
@@ -40,6 +42,9 @@ private:
     DemuxWorkerPtr m_demuxWorker{nullptr};
     DecodeWorkerPtr m_videoDecodeWorker{nullptr};
     DecodeWorkerPtr m_audioDecodeWorker{nullptr};
+
+    bool m_started{false};
+    bool m_audioActive{false};
 
     VideoParams m_videoParams{};
     AudioParams m_audioParams{};

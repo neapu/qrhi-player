@@ -19,6 +19,9 @@ public:
     void start();
     void stop();
 
+    // 仅允许在 start 之前调用：修改主流，各队列的丢包策略随之重建
+    void setMainStream(uint32_t streamIndex);
+
     fh::PacketPtr nextPacket(uint32_t streamIndex);
     void seek(int64_t us);
 
@@ -27,6 +30,9 @@ public:
 private:
     DemuxWorker(const Params& params, DemuxerPtr&& demuxer);
     bool initialize();
+
+    // 按当前主流为每条流创建 PacketQueue（主流阻塞式，其余满时丢最旧包）
+    void createPacketQueues();
 
     void workerThread();
 
@@ -39,6 +45,7 @@ private:
     DemuxerPtr m_demuxer{nullptr};
     std::thread m_workerThread{};
     std::atomic_bool m_exitFlag{false};
+    bool m_started{false};
     std::unordered_map<uint32_t, PacketQueue> m_packetQueues{};
     std::atomic_bool m_endOfFile{false};
 
