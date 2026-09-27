@@ -18,7 +18,7 @@ public:
     std::optional<AudioParams> audioParams() override;
     std::optional<VideoParams> videoParams() override;
     int64_t duration() override;
-    int seek(int64_t timestamp) override;
+    void seek(int64_t timestamp) override;
 private:
     explicit MediaSource(const IMediaSource::Params& params);
     bool initialize();
@@ -36,6 +36,7 @@ private:
     std::vector<AVPixelFormat> m_requiredPixelFormats{};
     std::vector<AVSampleFormat> m_requiredSampleFormats{};
     int m_initialSerial{0};
+    std::function<void(bool, int)> m_onSeekCompleted;
 
     LoggerPtr m_logger;
 

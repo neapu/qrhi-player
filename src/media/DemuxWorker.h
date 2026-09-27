@@ -1,5 +1,6 @@
 #pragma once
 #include <variant>
+#include <functional>
 #include "Demuxer.h"
 #include "PacketQueue.h"
 
@@ -13,6 +14,7 @@ public:
         // 非主流在队列满时会丢弃最旧的包
         uint32_t mainStreamIndex{0};
         int initialSerial{0};
+        std::function<void(bool, int)> onSeekCompleted;
     };
 
     static std::unique_ptr<DemuxWorker> create(const Params& params, DemuxerPtr&& demuxer);
@@ -25,7 +27,7 @@ public:
     void setMainStream(uint32_t streamIndex);
 
     MediaPacket nextPacket(uint32_t streamIndex);
-    int seek(int64_t us);
+    void seek(int64_t us);
 
     bool streamQueueEmpty(uint32_t streamIndex) const;
     bool endOfFile() const { return m_endOfFile; }
@@ -55,6 +57,7 @@ private:
     std::mutex m_seekMutex{};
     std::condition_variable m_seekCV{};
     std::atomic_int m_serial{0};
+    std::function<void(bool, int)> m_onSeekCompleted;
 };
 using DemuxWorkerPtr = std::unique_ptr<DemuxWorker>;
 

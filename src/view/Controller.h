@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QString>
 #include <QMutex>
+#include <cstdint>
 #include "media/IMediaSource.h"
 #include "audio_renderer/AudioRenderer.h"
 
@@ -35,7 +36,7 @@ signals:
     void playbackPositionChanged(int64_t positionUs);
     void fileOpened(int64_t durationUs);
     void fileClosed();
-    void seekFinished();
+    void seekFinished(bool succeeded);
 
 private:
     void createAudioRenderer(media::IMediaSource::AudioParams audioParams);
@@ -43,6 +44,7 @@ private:
     // 读取当前媒体时间，需要先持有 m_clock.mutex
     int64_t clockUsLocked() const;
     void reanchorClockLocked(int64_t newAnchorMediaUs);
+    void handleSeekCompleted(bool succeeded, int serial, uint64_t mediaGeneration);
 private:
     double m_volume{1.0};
     media::MediaSourcePtr m_mediaSource{nullptr};
@@ -69,7 +71,8 @@ private:
     AVRational m_audioTimeBase{0, 1};
 
     std::atomic_int m_serial{0};
-    std::atomic_int m_seekSerial{-1};
+    int64_t m_pendingSeekPositionUs{0};
+    uint64_t m_mediaGeneration{0};
 
     bool m_videoEnd{false};
     bool m_audioEnd{false};

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <functional>
 #include "MediaFrame.h"
 
 namespace media {
@@ -15,6 +16,7 @@ public:
         std::vector<AVPixelFormat> requiredPixelFormats{};
         std::vector<AVSampleFormat> requiredSampleFormats{};
         int initialSerial{0};
+        std::function<void(bool, int)> onSeekCompleted;
     };
 
     static std::unique_ptr<IMediaSource> create(const Params& params);
@@ -77,10 +79,9 @@ public:
     /**
      * @brief 跳转到指定的时间戳，单位为微秒。
      * @param timestamp 目标时间戳，单位为微秒。
-     * @return 返回跳转后的帧序列号。
-     * @note 序列号从媒体帧的opaque字段获取。
+     * @note 完成结果通过 Params::onSeekCompleted 回调报告。
      */
-    virtual int seek(int64_t timestamp) = 0;
+    virtual void seek(int64_t timestamp) = 0;
 };
 using MediaSourcePtr = std::unique_ptr<IMediaSource>;
 } // namespace media

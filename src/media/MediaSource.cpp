@@ -38,6 +38,7 @@ MediaSource::MediaSource(const IMediaSource::Params& params)
     , m_requiredPixelFormats(params.requiredPixelFormats)
     , m_requiredSampleFormats(params.requiredSampleFormats)
     , m_initialSerial(params.initialSerial)
+    , m_onSeekCompleted(params.onSeekCompleted)
 {
     if (m_instanceName.empty()) {
         m_instanceName = "default";
@@ -100,10 +101,24 @@ bool MediaSource::initialize()
         return false;
     }
 
+    auto onSeekCompleted = [this](bool succeeded, int serial) {
+        if (succeeded) {
+            if (m_videoDecodeWorker) {
+                m_videoDecodeWorker->seekRequired();
+            }
+            if (m_audioDecodeWorker) {
+                m_audioDecodeWorker->seekRequired();
+            }
+        }
+        if (m_onSeekCompleted) {
+            m_onSeekCompleted(succeeded, serial);
+        }
+    };
     DemuxWorker::Params demuxWorkerParams{
         m_logger,
         m_audioDecodeWorker ? m_audioDecodeWorker->streamIndex() : m_videoDecodeWorker->streamIndex(),
-        m_initialSerial
+        m_initialSerial,
+        std::move(onSeekCompleted)
     };
     m_demuxWorker = DemuxWorker::create(demuxWorkerParams, std::move(demuxer));
     if (!m_demuxWorker) {
@@ -172,19 +187,11 @@ int64_t MediaSource::duration()
     return m_duration;
 }
 
-int MediaSource::seek(int64_t timestamp)
+void MediaSource::seek(int64_t timestamp)
 {
-    int serial{0};
     if (m_demuxWorker) {
-        serial = m_demuxWorker->seek(timestamp);
+        m_demuxWorker->seek(timestamp);
     }
-    if (m_videoDecodeWorker) {
-        m_videoDecodeWorker->seekRequired();
-    }
-    if (m_audioDecodeWorker) {
-        m_audioDecodeWorker->seekRequired();
-    }
-    return serial;
 }
 
 void MediaSource::initializeLogger()

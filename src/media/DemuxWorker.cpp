@@ -50,7 +50,8 @@ DemuxWorker::DemuxWorker(const Params& params, DemuxerPtr&& demuxer)
     : m_logger(params.logger),
       m_mainStreamIndex(params.mainStreamIndex),
       m_demuxer(std::move(demuxer)),
-      m_serial(params.initialSerial)
+            m_serial(params.initialSerial),
+            m_onSeekCompleted(params.onSeekCompleted)
 {
 }
 
@@ -120,8 +121,13 @@ void DemuxWorker::workerThread()
         if (seekTargetUs != AV_NOPTS_VALUE) {
             if (m_demuxer->seek(seekTargetUs)) {
                 clearAllPacketQueues();
-                threadSerial = m_serial;
+                threadSerial = ++m_serial;
                 m_endOfFile = false;
+                if (m_onSeekCompleted) {
+                    m_onSeekCompleted(true, threadSerial);
+                }
+            } else if (m_onSeekCompleted) {
+                m_onSeekCompleted(false, threadSerial);
             }
         }
         auto packetExp = m_demuxer->readPacket();
@@ -193,16 +199,14 @@ MediaPacket DemuxWorker::nextPacket(uint32_t streamIndex)
     return EmptyPacket{};
 }
 
-int DemuxWorker::seek(int64_t us)
+void DemuxWorker::seek(int64_t us)
 {
     {
         std::lock_guard<std::mutex> lock(m_seekMutex);
         m_seekTargetUs = us;
-        m_serial++;
     }
     m_seekCV.notify_all();
     interruptMainStreamQueue();
-    return m_serial;
 }
 
 bool DemuxWorker::streamQueueEmpty(uint32_t streamIndex) const

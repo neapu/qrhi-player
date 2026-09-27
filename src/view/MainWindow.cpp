@@ -22,7 +22,8 @@ MainWindow::MainWindow(const QString& commandInputFile, QWidget* parent)
         m_playbackSlider->setValue(0);
         m_playbackSlider->setEnabled(false);
     });
-    connect(m_controller, &Controller::seekFinished, this, [this]() {
+    connect(m_controller, &Controller::seekFinished, this, [this](bool succeeded) {
+        (void)succeeded;
         m_seekPending = false;
     });
 }

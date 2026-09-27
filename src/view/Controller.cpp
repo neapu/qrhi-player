@@ -78,12 +78,18 @@ void Controller::reanchorClockLocked(int64_t newAnchorMediaUs)
 void Controller::openFile(const QString& filePath)
 {
     closeFile();
+    const uint64_t mediaGeneration = m_mediaGeneration;
     media::IMediaSource::Params params{};
     params.source = filePath.toStdString();
     params.logDir = view::LogManager::instance().logDir().toStdString();
     params.requiredPixelFormats = {AV_PIX_FMT_YUV420P};
     params.requiredSampleFormats = {AV_SAMPLE_FMT_FLT};
     params.initialSerial = m_serial;
+    params.onSeekCompleted = [this, mediaGeneration](bool succeeded, int serial) {
+        QMetaObject::invokeMethod(this, [this, succeeded, serial, mediaGeneration]() {
+            handleSeekCompleted(succeeded, serial, mediaGeneration);
+        }, Qt::QueuedConnection);
+    };
     m_mediaSource = media::IMediaSource::create(params);
     if (!m_mediaSource) {
         qCritical() << "Failed to open media source:" << filePath;
@@ -133,6 +139,7 @@ void Controller::openFile(const QString& filePath)
 
 void Controller::closeFile()
 {
+    ++m_mediaGeneration;
     m_audioRenderer.reset();
     m_audioTimeBase = AVRational{0, 1};
     m_hasAudio = false;
@@ -191,11 +198,6 @@ fh::FramePtr Controller::nextVideoFrame()
             continue;
         }
         m_serial = serial;
-        if (m_seekSerial != -1 && m_serial == m_seekSerial) {
-            m_seekSerial = -1;
-            emit seekFinished();
-        }
-
         // 取媒体时间
         QMutexLocker locker(&m_clock.mutex);
         if (m_clock.paused) {
@@ -270,11 +272,6 @@ fh::FramePtr Controller::nextAudioFrame()
             continue;
         }
         m_serial = serial;
-        if (m_seekSerial != -1 && m_serial == m_seekSerial) {
-            m_seekSerial = -1;
-            emit seekFinished();
-        }
-
         // 取媒体时间
         QMutexLocker locker(&m_clock.mutex);
         if (m_clock.paused) {
@@ -336,11 +333,38 @@ void Controller::setVolume(double volume)
     }
 }
 
+void Controller::handleSeekCompleted(bool succeeded, int serial, uint64_t mediaGeneration)
+{
+    if (mediaGeneration != m_mediaGeneration) {
+        return;
+    }
+    if (!succeeded) {
+        emit seekFinished(false);
+        return;
+    }
+
+    m_videoEnd = !m_hasVideo;
+    m_audioEnd = !m_hasAudio;
+    m_pendingVideoFrame.reset();
+    m_pendingAudioFrame.reset();
+    m_serial = serial;
+    {
+        QMutexLocker locker(&m_clock.mutex);
+        reanchorClockLocked(m_pendingSeekPositionUs);
+    }
+    emit seekFinished(true);
+}
+
 void Controller::seek(int64_t positionUs)
 {
     // MediaSource 的设计是播放完后可以继续 seek 到任意位置
     // Controller 的设计是播放完后就关闭 m_mediaSource, 状态回到 Stopped
-    m_seekSerial = m_mediaSource ? m_mediaSource->seek(positionUs) : 0;
+    if (!m_mediaSource) {
+        emit seekFinished(false);
+        return;
+    }
+    m_pendingSeekPositionUs = positionUs;
+    m_mediaSource->seek(positionUs);
 }
 
 } // namespace view
