@@ -37,6 +37,7 @@ MediaSource::MediaSource(const IMediaSource::Params& params)
     , m_instanceName(params.instanceName)
     , m_requiredPixelFormats(params.requiredPixelFormats)
     , m_requiredSampleFormats(params.requiredSampleFormats)
+    , m_initialSerial(params.initialSerial)
 {
     if (m_instanceName.empty()) {
         m_instanceName = "default";
@@ -101,7 +102,8 @@ bool MediaSource::initialize()
 
     DemuxWorker::Params demuxWorkerParams{
         m_logger,
-        m_audioDecodeWorker ? m_audioDecodeWorker->streamIndex() : m_videoDecodeWorker->streamIndex()
+        m_audioDecodeWorker ? m_audioDecodeWorker->streamIndex() : m_videoDecodeWorker->streamIndex(),
+        m_initialSerial
     };
     m_demuxWorker = DemuxWorker::create(demuxWorkerParams, std::move(demuxer));
     if (!m_demuxWorker) {
@@ -139,25 +141,14 @@ void MediaSource::start(bool audioAvailable)
     m_started = true;
 }
 
-fh::FramePtr MediaSource::nextVideoFrame()
+MediaFrame MediaSource::nextVideoFrame()
 {
-    return m_videoDecodeWorker ? m_videoDecodeWorker->nextFrame() : nullptr;
+    return m_videoDecodeWorker ? m_videoDecodeWorker->nextFrame() : EmptyFrame{};
 }
 
-fh::FramePtr MediaSource::nextAudioFrame()
+MediaFrame MediaSource::nextAudioFrame()
 {
-    return m_audioDecodeWorker ? m_audioDecodeWorker->nextFrame() : nullptr;
-}
-
-bool MediaSource::endOfFile()
-{
-    bool endOfFile = m_demuxWorker ? m_demuxWorker->endOfFile() : true;
-    bool videoFrameQueueEmpty = m_videoDecodeWorker ? m_videoDecodeWorker->queueEmpty() : true;
-    // 音频未启用时其包队列只进不出，不能参与判定
-    bool audioFrameQueueEmpty = m_audioActive && m_audioDecodeWorker ? m_audioDecodeWorker->queueEmpty() : true;
-    bool videoPacketQueueEmpty = m_demuxWorker && m_videoDecodeWorker ? m_demuxWorker->streamQueueEmpty(m_videoDecodeWorker->streamIndex()) : true;
-    bool audioPacketQueueEmpty = m_audioActive && m_demuxWorker && m_audioDecodeWorker ? m_demuxWorker->streamQueueEmpty(m_audioDecodeWorker->streamIndex()) : true;
-    return videoFrameQueueEmpty && audioFrameQueueEmpty && videoPacketQueueEmpty && audioPacketQueueEmpty && endOfFile;
+    return m_audioDecodeWorker ? m_audioDecodeWorker->nextFrame() : EmptyFrame{};
 }
 
 std::optional<IMediaSource::AudioParams> MediaSource::audioParams()
@@ -181,10 +172,11 @@ int64_t MediaSource::duration()
     return m_duration;
 }
 
-void MediaSource::seek(int64_t timestamp)
+int MediaSource::seek(int64_t timestamp)
 {
+    int serial{0};
     if (m_demuxWorker) {
-        m_demuxWorker->seek(timestamp);
+        serial = m_demuxWorker->seek(timestamp);
     }
     if (m_videoDecodeWorker) {
         m_videoDecodeWorker->seekRequired();
@@ -192,6 +184,7 @@ void MediaSource::seek(int64_t timestamp)
     if (m_audioDecodeWorker) {
         m_audioDecodeWorker->seekRequired();
     }
+    return serial;
 }
 
 void MediaSource::initializeLogger()
@@ -233,17 +226,19 @@ bool MediaSource::initializeVideo(const AVStream* stream)
         return false;
     }
     videoDecodeWorkerParams.frameProcessors = std::move(*videoFrameProcessorsRet);
+    videoDecodeWorkerParams.initialSerial = m_initialSerial;
 
+    m_videoParams.width = decoder->width();
+    m_videoParams.height = decoder->height();
+    m_videoParams.pixelFormat = m_targetPixelFormat;
+    m_videoParams.timeBase = decoder->timeBase();
+    m_videoParams.frameRate = decoder->frameRate();
     m_videoDecodeWorker = DecodeWorker::create(videoDecodeWorkerParams, std::move(decoder));
     if (!m_videoDecodeWorker) {
         LOG_ERROR(m_logger, "Failed to create video decode worker");
         return false;
     }
-    m_videoParams.width = decoder->width();
-    m_videoParams.height = decoder->height();
-    m_videoParams.pixelFormat = decoder->pixelFormat();
-    m_videoParams.timeBase = decoder->timeBase();
-    m_videoParams.frameRate = decoder->frameRate();
+    
     return true;
 }
 
@@ -275,17 +270,18 @@ bool MediaSource::initializeAudio(const AVStream* stream)
         return false;
     }
     audioDecodeWorkerParams.frameProcessors = std::move(*audioFrameProcessorsRet);
+    audioDecodeWorkerParams.initialSerial = m_initialSerial;
 
+    m_audioParams.sampleRate = decoder->sampleRate();
+    m_audioParams.channels = decoder->chLayout().nb_channels;
+    m_audioParams.sampleFormat = m_targetSampleFormat;
+    m_audioParams.timeBase = decoder->timeBase();
     m_audioDecodeWorker = DecodeWorker::create(audioDecodeWorkerParams, std::move(decoder));
     if (!m_audioDecodeWorker) {
         LOG_ERROR(m_logger, "Failed to create audio decode worker");
         return false;
     }
-
-    m_audioParams.sampleRate = decoder->sampleRate();
-    m_audioParams.channels = decoder->chLayout().nb_channels;
-    m_audioParams.sampleFormat = decoder->sampleFormat();
-    m_audioParams.timeBase = decoder->timeBase();
+    
     return true;
 }
 
@@ -299,6 +295,7 @@ std::optional<FrameProcessorList> MediaSource::makeVideoFrameProcessors(const De
     }
 
     if (containsPixelFormat(m_requiredPixelFormats, pixelFormat)) {
+        m_targetPixelFormat = pixelFormat;
         return frameProcessors; // 像素格式再请求的格式列表中，不用转换
     }
 
@@ -320,6 +317,7 @@ std::optional<FrameProcessorList> MediaSource::makeVideoFrameProcessors(const De
     swsProcessorParams.width = decoder->width();
     swsProcessorParams.height = decoder->height();
     swsProcessorParams.pixelFormat = targetPixelFormat;
+    m_targetPixelFormat = targetPixelFormat;
 
     auto swsProcessor = SwsProcessor::create(swsProcessorParams);
     if (!swsProcessor) {
@@ -341,6 +339,7 @@ std::optional<FrameProcessorList> MediaSource::makeAudioFrameProcessors(const De
     }
 
     if (containsSampleFormat(m_requiredSampleFormats, sampleFormat)) {
+        m_targetSampleFormat = sampleFormat;
         return frameProcessors; // 样本格式在请求的格式列表中，不用转换
     }
 
@@ -360,6 +359,7 @@ std::optional<FrameProcessorList> MediaSource::makeAudioFrameProcessors(const De
     SwrProcessor::Params swrProcessorParams{};
     swrProcessorParams.logger = m_logger;
     swrProcessorParams.sampleFormat = targetSampleFormat;
+    m_targetSampleFormat = targetSampleFormat;
     swrProcessorParams.sampleRate = decoder->sampleRate();
     av_channel_layout_copy(&swrProcessorParams.channelLayout, &decoder->chLayout());
 

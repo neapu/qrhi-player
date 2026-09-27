@@ -1,4 +1,5 @@
 #pragma once
+#include <variant>
 #include "Demuxer.h"
 #include "PacketQueue.h"
 
@@ -11,6 +12,7 @@ public:
         // 这一路流不会被丢包，队列满时会阻塞解封装线程，用于控制读取文件的速度
         // 非主流在队列满时会丢弃最旧的包
         uint32_t mainStreamIndex{0};
+        int initialSerial{0};
     };
 
     static std::unique_ptr<DemuxWorker> create(const Params& params, DemuxerPtr&& demuxer);
@@ -22,8 +24,8 @@ public:
     // 仅允许在 start 之前调用：修改主流，各队列的丢包策略随之重建
     void setMainStream(uint32_t streamIndex);
 
-    fh::PacketPtr nextPacket(uint32_t streamIndex);
-    void seek(int64_t us);
+    MediaPacket nextPacket(uint32_t streamIndex);
+    int seek(int64_t us);
 
     bool streamQueueEmpty(uint32_t streamIndex) const;
     bool endOfFile() const { return m_endOfFile; }
@@ -52,7 +54,7 @@ private:
     int64_t m_seekTargetUs{AV_NOPTS_VALUE};
     std::mutex m_seekMutex{};
     std::condition_variable m_seekCV{};
-    int m_serial{0};
+    std::atomic_int m_serial{0};
 };
 using DemuxWorkerPtr = std::unique_ptr<DemuxWorker>;
 

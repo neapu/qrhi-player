@@ -4,8 +4,11 @@
 #include <thread>
 #include <functional>
 #include <queue>
+#include <variant>
 #include "Decoder.h"
 #include "FrameProcessor.h"
+#include "MediaPacket.h"
+#include "media/MediaFrame.h"
 
 namespace media {
 class DecodeWorker {
@@ -13,7 +16,8 @@ public:
     struct Params {
         LoggerPtr logger{nullptr};
         FrameProcessorList frameProcessors;
-        std::function<fh::PacketPtr()> nextPacketCallback;
+        std::function<MediaPacket()> nextPacketCallback;
+        int initialSerial{0};
     };
     static std::unique_ptr<DecodeWorker> create(const Params& params, DecoderPtr&& decoder);
 
@@ -26,7 +30,7 @@ public:
     uint32_t streamIndex() const;
 
     // 非阻塞，队列为空时返回nullptr
-    fh::FramePtr nextFrame();
+    MediaFrame nextFrame();
 
     bool queueEmpty() const;
 private:
@@ -36,21 +40,22 @@ private:
     void workerThread();
 
     fh::FramePtr processFrame(fh::FramePtr&& frame);
+    void decodePacket(fh::PacketPtr&& packet, bool eof);
 
 private:
     LoggerPtr m_logger{nullptr};
     FrameProcessorList m_frameProcessors{};
-    std::function<fh::PacketPtr()> m_nextPacketCallback{nullptr};
+    std::function<MediaPacket()> m_nextPacketCallback{nullptr};
     DecoderPtr m_decoder{nullptr};
 
     std::thread m_workerThread;
     std::atomic_bool m_exitFlag{false};
 
-    std::deque<fh::FramePtr> m_frameQueue;
+    std::deque<MediaFrame> m_frameQueue;
     mutable std::mutex m_frameQueueMutex;
     std::condition_variable m_frameQueueNotFullCV;
 
-    bool m_seekRequired{false};
+    std::atomic_bool m_seekRequired{false};
     int m_serial{0};
 };
 using DecodeWorkerPtr = std::unique_ptr<DecodeWorker>;

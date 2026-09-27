@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <Frame.h>
+#include "MediaFrame.h"
 
 namespace media {
 class IMediaSource {
@@ -14,6 +14,7 @@ public:
         std::string instanceName{"default"};   // 多实例时区分日志
         std::vector<AVPixelFormat> requiredPixelFormats{};
         std::vector<AVSampleFormat> requiredSampleFormats{};
+        int initialSerial{0};
     };
 
     static std::unique_ptr<IMediaSource> create(const Params& params);
@@ -32,20 +33,16 @@ public:
 
     /**
      * @brief 获取下一个视频帧。消费操作。
-     * @return 下一个视频帧，如果没有则返回空。
+     * @return 下一个视频帧，如果度到流结尾，返回 EndFrame
+     * @note 非阻塞，如果帧队列为空，返回 EmptyFrame。
      */
-    virtual fh::FramePtr nextVideoFrame() = 0;
+    virtual MediaFrame nextVideoFrame() = 0;
     /**
      * @brief 获取下一个音频帧。消费操作。
-     * @return 下一个音频帧，如果没有则返回空。
+     * @return 下一个音频帧，如果度到流结尾，返回 EndFrame
+     * @note 非阻塞，如果帧队列为空，返回 EmptyFrame。
      */
-    virtual fh::FramePtr nextAudioFrame() = 0;
-
-    /**
-     * @brief 判断媒体是否播放到结尾。
-     * @return 如果已经播放到结尾，返回true，否则返回false。
-     */
-    virtual bool endOfFile() = 0;
+    virtual MediaFrame nextAudioFrame() = 0;
 
     struct VideoParams {
         int width; // 视频宽度
@@ -80,8 +77,10 @@ public:
     /**
      * @brief 跳转到指定的时间戳，单位为微秒。
      * @param timestamp 目标时间戳，单位为微秒。
+     * @return 返回跳转后的帧序列号。
+     * @note 序列号从媒体帧的opaque字段获取。
      */
-    virtual void seek(int64_t timestamp) = 0;
+    virtual int seek(int64_t timestamp) = 0;
 };
 using MediaSourcePtr = std::unique_ptr<IMediaSource>;
 } // namespace media

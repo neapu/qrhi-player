@@ -13,13 +13,12 @@ public:
 
     void start(bool audioAvailable) override;
 
-    fh::FramePtr nextVideoFrame() override;
-    fh::FramePtr nextAudioFrame() override;
-    bool endOfFile() override;
+    MediaFrame nextVideoFrame() override;
+    MediaFrame nextAudioFrame() override;
     std::optional<AudioParams> audioParams() override;
     std::optional<VideoParams> videoParams() override;
     int64_t duration() override;
-    void seek(int64_t timestamp) override;
+    int seek(int64_t timestamp) override;
 private:
     explicit MediaSource(const IMediaSource::Params& params);
     bool initialize();
@@ -36,12 +35,15 @@ private:
     std::string m_instanceName{};
     std::vector<AVPixelFormat> m_requiredPixelFormats{};
     std::vector<AVSampleFormat> m_requiredSampleFormats{};
+    int m_initialSerial{0};
 
     LoggerPtr m_logger;
 
     DemuxWorkerPtr m_demuxWorker{nullptr};
     DecodeWorkerPtr m_videoDecodeWorker{nullptr};
+    AVPixelFormat m_targetPixelFormat{AV_PIX_FMT_NONE};
     DecodeWorkerPtr m_audioDecodeWorker{nullptr};
+    AVSampleFormat m_targetSampleFormat{AV_SAMPLE_FMT_NONE};
 
     bool m_started{false};
     bool m_audioActive{false};

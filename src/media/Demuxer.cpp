@@ -143,31 +143,25 @@ int64_t Demuxer::duration() const
     return 0;
 }
 
-fh::PacketPtr Demuxer::readPacket()
+std::expected<fh::PacketPtr, int> Demuxer::readPacket()
 {
     if (!m_inputContext) {
         LOG_ERROR(m_logger, "Input context is not initialized");
-        return nullptr;
+        return std::unexpected(-1);
     }
 
     fh::PacketPtr packet = fh::makePacket();
     int ret = av_read_frame(m_inputContext.get(), packet.get());
     if (ret < 0) {
-        if (ret == AVERROR_EOF) {
-            m_endOfFile = true;
-            return nullptr;
+        if (ret != AVERROR_EOF) {
+            LOG_ERROR(m_logger, "Failed to read frame, error: {}", fh::err2str(ret));
         }
-        LOG_ERROR(m_logger, "Failed to read frame, error: {}", fh::err2str(ret));
-        return nullptr;
+        return std::unexpected(ret);
     }
 
     return packet;
 }
 
-bool Demuxer::endOfFile() const
-{
-    return m_endOfFile;
-}
 AVFormatContext* Demuxer::formatContext() const
 {
     return m_inputContext.get();

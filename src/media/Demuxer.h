@@ -21,9 +21,7 @@ public:
     bool toHead();
     int64_t duration() const;
 
-    fh::PacketPtr readPacket();
-
-    bool endOfFile() const;
+    std::expected<fh::PacketPtr, int> readPacket();
 
     AVFormatContext* formatContext() const;
 
@@ -35,7 +33,6 @@ private:
     std::string m_url{};
     LoggerPtr m_logger{nullptr};
     fh::InputContextPtr m_inputContext{nullptr};
-    bool m_endOfFile{false};
 };
 using DemuxerPtr = std::unique_ptr<Demuxer>;
 } // namespace media

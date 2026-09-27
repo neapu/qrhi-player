@@ -12,6 +12,28 @@ qt_add_executable(${EXE_NAME}
     MainWindow.cpp
     LogManager.h
     LogManager.cpp
+
+    components/VolumeButton.h
+    components/VolumeButton.cpp
+    components/PlayOrPauseButton.h
+    components/PlayOrPauseButton.cpp
+    components/StopButton.h
+    components/StopButton.cpp
+    components/PlaybackLabel.h
+    components/PlaybackLabel.cpp
+
+)
+
+qt_add_resources(${EXE_NAME} "player_icons"
+    PREFIX "/icons"
+    BASE "images"
+    FILES
+        images/pause.svg
+        images/play.svg
+        images/stop.svg
+        images/volume-mute.svg
+        images/volume-down.svg
+        images/volume-up.svg
 )
 
 add_subdirectory(video_renderer)

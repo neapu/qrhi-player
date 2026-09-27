@@ -8,6 +8,13 @@ int getPacketSerial(const fh::PacketPtr& packet)
     }
     return 0;
 }
+
+void setFrameSerial(const fh::FramePtr& frame, int serial)
+{
+    if (frame) {
+        frame->opaque = reinterpret_cast<void*>(static_cast<intptr_t>(serial));
+    }
+}
 }
 
 namespace media {
@@ -24,7 +31,8 @@ DecodeWorker::DecodeWorker(const Params& params, DecoderPtr&& decoder)
     : m_logger(params.logger),
       m_frameProcessors(params.frameProcessors),
       m_nextPacketCallback(params.nextPacketCallback),
-      m_decoder(std::move(decoder))
+      m_decoder(std::move(decoder)),
+      m_serial(params.initialSerial)
 {
 }
 
@@ -71,11 +79,11 @@ uint32_t DecodeWorker::streamIndex() const
     return m_decoder->stream()->index;
 }
 
-fh::FramePtr DecodeWorker::nextFrame()
+MediaFrame DecodeWorker::nextFrame()
 {
     std::unique_lock<std::mutex> lock(m_frameQueueMutex);
     if (m_frameQueue.empty()) {
-        return nullptr;
+        return EmptyFrame{};
     }
     auto frame = std::move(m_frameQueue.front());
     m_frameQueue.pop_front();
@@ -91,50 +99,32 @@ bool DecodeWorker::queueEmpty() const
 
 void DecodeWorker::workerThread()
 {
+    bool eof{false};
     while (!m_exitFlag) {
-        {
-            std::unique_lock<std::mutex> lock(m_frameQueueMutex);
-            m_seekRequired = false; // 标识只是为了打断入队阻塞，真正的清理由序列号变化触发
-        }
+        m_seekRequired = false; // 标识只是为了打断入队阻塞，真正的清理由序列号变化触发
         
-        auto packet = m_nextPacketCallback();
-        if (!packet) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
-        int packetSerial = getPacketSerial(packet);
-        if (packetSerial != m_serial) {
-            std::unique_lock<std::mutex> lock(m_frameQueueMutex);
-            m_frameQueue.clear();
-            m_decoder->flush();
-            m_serial = packetSerial;
-        }
-        bool ret = m_decoder->sendPacket(std::move(packet));
-        if (!ret) {
-            continue;
-        }
-        for (;;) {
-            auto frameResult = m_decoder->receiveFrame();
-            if (!frameResult) {
-                int err = frameResult.error();
-                if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) {
-                    break;
+        auto packetVariant = m_nextPacketCallback();
+        std::visit([this, &eof](auto&& arg) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, EndPacket>) {
+                if (!eof) {
+                    eof = true;
+                    decodePacket(nullptr, eof); // Indicate end of stream to the decoder
                 }
-                LOG_ERROR(m_logger, "Failed to receive frame from decoder, error: {}", err);
-                break;
-            }
-            auto processedFrame = processFrame(std::move(frameResult.value()));
-            if (processedFrame) {
-                std::unique_lock<std::mutex> lock(m_frameQueueMutex);
-                m_frameQueueNotFullCV.wait(lock, [this]() { 
-                    return m_frameQueue.size() < 10 || m_exitFlag || m_seekRequired; 
-                });
-                if (m_exitFlag || m_seekRequired) {
-                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, fh::PacketPtr>) {
+                int packetSerial = getPacketSerial(arg);
+                if (packetSerial != m_serial) {
+                    eof = false; // Reset EOF flag when a new serial is encountered
+                    std::unique_lock<std::mutex> lock(m_frameQueueMutex);
+                    m_frameQueue.clear();
+                    m_decoder->flush();
+                    m_serial = packetSerial;
                 }
-                m_frameQueue.push_back(std::move(processedFrame));
+                decodePacket(std::move(arg), eof);
+            } else {
+                LOG_DEBUG(m_logger, "Unknown packet variant received");
             }
-        }
+        }, std::move(packetVariant));
     }
 }
 
@@ -147,6 +137,41 @@ fh::FramePtr DecodeWorker::processFrame(fh::FramePtr&& frame)
         }
     }
     return std::move(frame);
+}
+
+void DecodeWorker::decodePacket(fh::PacketPtr&& packet, bool eof)
+{
+    bool ret = m_decoder->sendPacket(std::move(packet));
+    if (!ret) {
+        return;
+    }
+    for (;;) {
+        auto frameResult = m_decoder->receiveFrame();
+        if (!frameResult) {
+            int err = frameResult.error();
+            if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) {
+                break;
+            }
+            LOG_ERROR(m_logger, "Failed to receive frame from decoder, error: {}", err);
+            break;
+        }
+        auto processedFrame = processFrame(std::move(frameResult.value()));
+        if (processedFrame) {
+            setFrameSerial(processedFrame, m_serial);
+            std::unique_lock<std::mutex> lock(m_frameQueueMutex);
+            m_frameQueueNotFullCV.wait(lock, [this]() { 
+                return m_frameQueue.size() < 10 || m_exitFlag || m_seekRequired; 
+            });
+            if (m_exitFlag || m_seekRequired) {
+                break;
+            }
+            m_frameQueue.push_back(std::move(processedFrame));
+        }
+    }
+    if (eof) {
+        std::unique_lock<std::mutex> lock(m_frameQueueMutex);
+        m_frameQueue.push_back(EndFrame{});
+    }
 }
 
 } // namespace media

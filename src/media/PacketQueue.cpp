@@ -6,7 +6,7 @@ PacketQueue::PacketQueue(size_t maxSize, bool dropOldest)
 {
 }
 
-void PacketQueue::push(fh::PacketPtr&& packet)
+void PacketQueue::push(MediaPacket&& packet)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
     if (m_queue.size() >= m_maxSize) {
@@ -21,16 +21,20 @@ void PacketQueue::push(fh::PacketPtr&& packet)
         }
     }
     m_queue.push_back(std::move(packet));
-    m_nonFullCV.notify_one();
+    m_nonEmptyCV.notify_one();
 }
 
-fh::PacketPtr PacketQueue::pop()
+MediaPacket PacketQueue::pop()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
     if (m_queue.empty()) {
-        return nullptr;
+        m_nonEmptyCV.wait(lock, [this] { return !m_queue.empty() || m_interrupted; });
+        if (m_interrupted) {
+            m_interrupted = false;
+            return EmptyPacket{};
+        }
     }
-    fh::PacketPtr packet = std::move(m_queue.front());
+    MediaPacket packet = std::move(m_queue.front());
     m_queue.pop_front();
     m_nonFullCV.notify_one();
     return packet;
@@ -49,6 +53,7 @@ void PacketQueue::interrupt()
     std::unique_lock<std::mutex> lock(m_mutex);
     m_interrupted = true;
     m_nonFullCV.notify_all();
+    m_nonEmptyCV.notify_all();
 }
 
 bool PacketQueue::empty() const

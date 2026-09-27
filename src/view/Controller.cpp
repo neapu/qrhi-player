@@ -28,6 +28,14 @@ int64_t framePtsUs(const fh::FramePtr& frame, AVRational timeBase)
     return av_rescale_q(pts, tb, AVRational{1, 1'000'000});
 }
 
+int getFrameSerial(const fh::FramePtr& frame)
+{
+    if (!frame) {
+        return -1;
+    }
+    return static_cast<int>(reinterpret_cast<intptr_t>(frame->opaque));
+}
+
 }
 
 namespace view {
@@ -47,10 +55,12 @@ void Controller::createAudioRenderer(media::IMediaSource::AudioParams audioParam
     params.frameCallback = [this]() -> fh::FramePtr {
         return nextAudioFrame();
     };
-    params.volume = 1.0;
+    params.volume = m_volume;
     m_audioRenderer = AudioRenderer::create(params);
     if (!m_audioRenderer) {
         qCritical() << "Failed to create audio renderer";
+        m_hasAudio = false;
+        m_audioEnd = true;
     }
 }
 
@@ -65,14 +75,6 @@ void Controller::reanchorClockLocked(int64_t newAnchorMediaUs)
     m_clock.anchorWallUs = steadyClockUs();
 }
 
-void Controller::endOfFile()
-{
-    // 可能从音频线程触发，要切换到GUI线程
-    QMetaObject::invokeMethod(this, [this]() {
-        closeFile();
-    }, Qt::QueuedConnection);
-}
-
 void Controller::openFile(const QString& filePath)
 {
     closeFile();
@@ -81,6 +83,7 @@ void Controller::openFile(const QString& filePath)
     params.logDir = view::LogManager::instance().logDir().toStdString();
     params.requiredPixelFormats = {AV_PIX_FMT_YUV420P};
     params.requiredSampleFormats = {AV_SAMPLE_FMT_FLT};
+    params.initialSerial = m_serial;
     m_mediaSource = media::IMediaSource::create(params);
     if (!m_mediaSource) {
         qCritical() << "Failed to open media source:" << filePath;
@@ -97,16 +100,16 @@ void Controller::openFile(const QString& filePath)
 
     // 先创建渲染器再启动管线：音频设备是否可用决定 MediaSource 选用哪条流作为主流
     auto audioParams = m_mediaSource->audioParams();
+    m_hasAudio = audioParams.has_value();
+    m_audioEnd = !m_hasAudio;
     if (audioParams) {
         createAudioRenderer(*audioParams);
-        m_hasAudio = m_audioRenderer != nullptr;
-    } else {
-        m_hasAudio = false;
     }
 
     // 根据帧率估算一帧视频帧的持续时间
     auto videoParams = m_mediaSource->videoParams();
     m_hasVideo = videoParams.has_value();
+    m_videoEnd = !m_hasVideo;
     if (videoParams) {
         m_videoFrameDurationUs = frameDurationUs(videoParams->frameRate);
         if (m_videoFrameDurationUs == 0) {
@@ -124,6 +127,7 @@ void Controller::openFile(const QString& filePath)
         return;
     }
 
+    emit fileOpened(m_mediaSource->duration());
     m_mediaSource->start(m_hasAudio);
 }
 
@@ -145,6 +149,7 @@ void Controller::closeFile()
         m_clock.pausedMediaUs = 0;
         m_clock.paused = false;
     }
+    emit fileClosed();
 }
 
 fh::FramePtr Controller::nextVideoFrame()
@@ -158,13 +163,37 @@ fh::FramePtr Controller::nextVideoFrame()
             return nullptr;
         }
         if (!m_pendingVideoFrame) {
-            m_pendingVideoFrame = m_mediaSource->nextVideoFrame();
+            media::MediaFrame mediaFrame = m_mediaSource->nextVideoFrame();
+            std::visit([this](auto&& frame) {
+                if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, fh::FramePtr>) {
+                    m_pendingVideoFrame = std::move(frame);
+                } else if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, media::EndFrame>) {
+                    m_videoEnd = true;
+                    if (m_videoEnd && m_audioEnd) {
+                        closeFile();
+                    }
+                } else if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, media::EmptyFrame>) {
+                    qDebug() << "Empty frame received";
+                    m_pendingVideoFrame = nullptr;
+                } else {
+                    qCritical() << "Unknown frame type received";
+                }
+            }, std::move(mediaFrame));
+            
         }
         if (!m_pendingVideoFrame) {
-            if (m_mediaSource->endOfFile()) {
-                endOfFile();
-            }
             return nullptr;
+        }
+
+        int serial = getFrameSerial(m_pendingVideoFrame);
+        if (serial < m_serial) {
+            m_pendingVideoFrame.reset();
+            continue;
+        }
+        m_serial = serial;
+        if (m_seekSerial != -1 && m_serial == m_seekSerial) {
+            m_seekSerial = -1;
+            emit seekFinished();
         }
 
         // 取媒体时间
@@ -192,6 +221,10 @@ fh::FramePtr Controller::nextVideoFrame()
         if (ptsUs > mediaUs) {
             return nullptr;
         }
+
+        if (!m_hasAudio) {
+            emit playbackPositionChanged(mediaUs);
+        }
         return std::exchange(m_pendingVideoFrame, nullptr);
     }
     return nullptr;
@@ -207,13 +240,39 @@ fh::FramePtr Controller::nextAudioFrame()
             return nullptr;
         }
         if (!m_pendingAudioFrame) {
-            m_pendingAudioFrame = m_mediaSource->nextAudioFrame();
+            media::MediaFrame mediaFrame = m_mediaSource->nextAudioFrame();
+            std::visit([this](auto&& frame) {
+                if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, fh::FramePtr>) {
+                    m_pendingAudioFrame = std::move(frame);
+                } else if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, media::EndFrame>) {
+                    // 这个回调在音频线程，需要切换到gui线程
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_audioEnd = true;
+                        if (m_videoEnd && m_audioEnd) {
+                            closeFile();
+                        }
+                    }, Qt::QueuedConnection);
+                } else if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, media::EmptyFrame>) {
+                    qDebug() << "Empty frame received";
+                    m_pendingAudioFrame.reset();
+                } else {
+                    qCritical() << "Unknown frame type received";
+                }
+            }, std::move(mediaFrame));
         }
         if (!m_pendingAudioFrame) {
-            if (m_mediaSource->endOfFile()) {
-                endOfFile();
-            }
             return nullptr;
+        }
+
+        int serial = getFrameSerial(m_pendingAudioFrame);
+        if (serial < m_serial) {
+            m_pendingAudioFrame.reset();
+            continue;
+        }
+        m_serial = serial;
+        if (m_seekSerial != -1 && m_serial == m_seekSerial) {
+            m_seekSerial = -1;
+            emit seekFinished();
         }
 
         // 取媒体时间
@@ -239,6 +298,7 @@ fh::FramePtr Controller::nextAudioFrame()
             continue;
         }
 
+        emit playbackPositionChanged(mediaUs);
         return std::exchange(m_pendingAudioFrame, nullptr);
     }
     return nullptr;
@@ -266,6 +326,21 @@ Controller::State Controller::state() const
         return State::Paused;
     }
     return State::Playing;
+}
+
+void Controller::setVolume(double volume)
+{
+    m_volume = volume;
+    if (m_audioRenderer) {
+        m_audioRenderer->setVolume(m_volume);
+    }
+}
+
+void Controller::seek(int64_t positionUs)
+{
+    // MediaSource 的设计是播放完后可以继续 seek 到任意位置
+    // Controller 的设计是播放完后就关闭 m_mediaSource, 状态回到 Stopped
+    m_seekSerial = m_mediaSource ? m_mediaSource->seek(positionUs) : 0;
 }
 
 } // namespace view
