@@ -42,6 +42,7 @@ private:
 
     void interruptMainStreamQueue();
     void clearAllPacketQueues();
+    void stopAllPacketQueues();
 
 private:
     LoggerPtr m_logger{nullptr};

@@ -172,6 +172,13 @@ void DemuxWorker::clearAllPacketQueues()
     }
 }
 
+void DemuxWorker::stopAllPacketQueues()
+{
+    for (auto& [index, queue] : m_packetQueues) {
+        queue.stop();
+    }
+}
+
 void DemuxWorker::start()
 {
     m_exitFlag = false;
@@ -183,8 +190,7 @@ void DemuxWorker::stop()
 {
     m_exitFlag = true;
     m_seekCV.notify_all();
-    interruptMainStreamQueue();
-    clearAllPacketQueues();
+    stopAllPacketQueues();
     if (m_workerThread.joinable()) {
         m_workerThread.join();
     }

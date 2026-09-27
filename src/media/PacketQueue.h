@@ -14,6 +14,7 @@ public:
     void clear();
     void interrupt();
     bool empty() const;
+    void stop();
 
 private:
     std::deque<MediaPacket> m_queue{};
@@ -23,6 +24,7 @@ private:
     size_t m_maxSize{0};
     bool m_dropOldest{false};
     bool m_interrupted{false};
+    bool m_stopped{false};
 };
 using PacketQueuePtr = std::unique_ptr<PacketQueue>;
 } // namespace media

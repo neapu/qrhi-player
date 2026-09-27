@@ -47,15 +47,16 @@ MediaSource::MediaSource(const IMediaSource::Params& params)
 
 MediaSource::~MediaSource()
 {
+    if (m_demuxWorker) {
+        m_demuxWorker->stop();
+    }
     if (m_videoDecodeWorker) {
         m_videoDecodeWorker->stop();
     }
     if (m_audioDecodeWorker) {
         m_audioDecodeWorker->stop();
     }
-    if (m_demuxWorker) {
-        m_demuxWorker->stop();
-    }
+    
 
     if (m_logger) {
         m_logger->flush();
