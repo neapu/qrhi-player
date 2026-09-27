@@ -345,8 +345,6 @@ void Controller::handleSeekCompleted(bool succeeded, int serial, uint64_t mediaG
 
     m_videoEnd = !m_hasVideo;
     m_audioEnd = !m_hasAudio;
-    m_pendingVideoFrame.reset();
-    m_pendingAudioFrame.reset();
     m_serial = serial;
     {
         QMutexLocker locker(&m_clock.mutex);
