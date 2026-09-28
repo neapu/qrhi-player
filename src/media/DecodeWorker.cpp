@@ -106,6 +106,10 @@ void DecodeWorker::workerThread()
         auto packetVariant = m_nextPacketCallback();
         std::visit([this, &eof](auto&& arg) {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, EndPacket>) {
+                EndPacket endPacket = std::move(arg);
+                if (endPacket.serial > m_serial) {
+                    m_serial = endPacket.serial;
+                }
                 if (!eof) {
                     eof = true;
                     decodePacket(nullptr, eof); // Indicate end of stream to the decoder
@@ -113,7 +117,7 @@ void DecodeWorker::workerThread()
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, fh::PacketPtr>) {
                 int packetSerial = getPacketSerial(arg);
-                if (packetSerial != m_serial) {
+                if (packetSerial > m_serial) {
                     eof = false; // Reset EOF flag when a new serial is encountered
                     std::unique_lock<std::mutex> lock(m_frameQueueMutex);
                     m_frameQueue.clear();
@@ -168,9 +172,9 @@ void DecodeWorker::decodePacket(fh::PacketPtr&& packet, bool eof)
             m_frameQueue.push_back(std::move(processedFrame));
         }
     }
-    if (eof) {
+    if (eof && !m_seekRequired && !m_exitFlag) {
         std::unique_lock<std::mutex> lock(m_frameQueueMutex);
-        m_frameQueue.push_back(EndFrame{});
+        m_frameQueue.push_back(EndFrame{m_serial});
     }
 }
 

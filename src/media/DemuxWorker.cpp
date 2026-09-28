@@ -137,7 +137,7 @@ void DemuxWorker::workerThread()
                 m_endOfFile = true;
                 // 所有流都插入一个 EndPacket
                 for (auto& [index, queue] : m_packetQueues) {
-                    queue.push(EndPacket{});
+                    queue.push(EndPacket{threadSerial});
                 }
                 // 等待 seek 请求
                 std::unique_lock<std::mutex> lock(m_seekMutex);

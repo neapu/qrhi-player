@@ -17,10 +17,12 @@ MainWindow::MainWindow(const QString& commandInputFile, QWidget* parent)
         m_playbackSlider->setRange(0, static_cast<int>(durationUs / 1000));
         m_playbackSlider->setValue(0);
         m_playbackSlider->setEnabled(true);
+        m_seekPending = false;
     });
     connect(m_controller, &Controller::fileClosed, this, [this]() {
         m_playbackSlider->setValue(0);
         m_playbackSlider->setEnabled(false);
+        m_seekPending = false;
     });
     connect(m_controller, &Controller::seekFinished, this, [this](bool succeeded) {
         (void)succeeded;

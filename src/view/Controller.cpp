@@ -175,6 +175,10 @@ fh::FramePtr Controller::nextVideoFrame()
                 if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, fh::FramePtr>) {
                     m_pendingVideoFrame = std::move(frame);
                 } else if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, media::EndFrame>) {
+                    media::EndFrame endFrame = std::move(frame);
+                    if (endFrame.serial < m_serial) {
+                        return;
+                    }
                     m_videoEnd = true;
                     if (m_videoEnd && m_audioEnd) {
                         closeFile();
@@ -247,6 +251,10 @@ fh::FramePtr Controller::nextAudioFrame()
                 if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, fh::FramePtr>) {
                     m_pendingAudioFrame = std::move(frame);
                 } else if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, media::EndFrame>) {
+                    media::EndFrame endFrame = std::move(frame);
+                    if (endFrame.serial < m_serial) {
+                        return;
+                    }
                     // 这个回调在音频线程，需要切换到gui线程
                     QMetaObject::invokeMethod(this, [this]() {
                         m_audioEnd = true;
@@ -348,7 +356,11 @@ void Controller::handleSeekCompleted(bool succeeded, int serial, uint64_t mediaG
     m_serial = serial;
     {
         QMutexLocker locker(&m_clock.mutex);
-        reanchorClockLocked(m_pendingSeekPositionUs);
+        if (m_clock.paused) {
+            m_clock.pausedMediaUs = m_pendingSeekPositionUs;
+        } else {
+            reanchorClockLocked(m_pendingSeekPositionUs);
+        }
     }
     emit seekFinished(true);
 }
