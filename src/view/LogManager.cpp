@@ -79,19 +79,31 @@ void LogManager::initialize()
 
 #ifdef _WIN32
     spdlog::filename_t logFileT = QString("%1/main.log").arg(dir).toStdWString();
+    spdlog::filename_t ffmpegLogFileT = QString("%1/ffmpeg.log").arg(dir).toStdWString();
 #else
     spdlog::filename_t logFileT = QString("%1/main.log").arg(dir).toStdString();
+    spdlog::filename_t ffmpegLogFileT = QString("%1/ffmpeg.log").arg(dir).toStdString();
 #endif
     auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logFileT, 1024 * 1024 * 5, 3);
+    auto ffmpegFileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(ffmpegLogFileT, 1024 * 1024 * 5, 3);
 
 #ifdef DEBUG
     auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    consoleSink->set_level(spdlog::level::info);
     m_logger = std::make_shared<spdlog::logger>("main", spdlog::sinks_init_list{fileSink, consoleSink});
     m_logger->set_level(spdlog::level::debug);
 #else
     m_logger = std::make_shared<spdlog::logger>("main", fileSink);
     m_logger->set_level(spdlog::level::info);
 #endif
+    m_ffmpegLogger = std::make_shared<spdlog::logger>("ffmpeg", ffmpegFileSink);
+#ifdef DEBUG
+    m_ffmpegLogger->set_level(spdlog::level::debug);
+#else
+    m_ffmpegLogger->set_level(spdlog::level::info);
+#endif
+    m_ffmpegLogger->flush_on(spdlog::level::warn);
+    m_ffmpegLogger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
     m_logger->flush_on(spdlog::level::warn);
     m_logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%s:%#] %v");
     spdlog::set_default_logger(m_logger);
@@ -99,7 +111,7 @@ void LogManager::initialize()
     qInstallMessageHandler(logQtMessageHandler);
 
     av_log_set_callback([](void* ptr, int level, const char* fmt, va_list vl) {
-        auto logger = spdlog::default_logger();
+        auto logger = instance().m_ffmpegLogger;
         if (logger) {
             char buffer[1024];
             vsnprintf(buffer, sizeof(buffer), fmt, vl);
@@ -112,6 +124,9 @@ void LogManager::shutdown()
 {
     if (m_logger) {
         m_logger->flush();
+    }
+    if (m_ffmpegLogger) {
+        m_ffmpegLogger->flush();
     }
     qInstallMessageHandler(nullptr);
     spdlog::shutdown();

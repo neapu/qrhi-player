@@ -1,6 +1,9 @@
 #include "MainWindow.h"
 #include <QDebug>
 #include <QVBoxLayout>
+#include <QMenuBar>
+#include <QFileDialog>
+#include <QMessageBox>
 
 namespace view {
 
@@ -11,7 +14,10 @@ MainWindow::MainWindow(const QString& commandInputFile, QWidget* parent)
     resize(800, 600);
 
     m_controller = new Controller(this);
+
+    // macos 中必须先创建 QRhiWidget 再创建菜单，否则会出现 No QRhi 的错误
     createWidgets();
+    createMenu();
 
     connect(m_controller, &Controller::fileOpened, this, [this](int64_t durationUs) {
         m_playbackSlider->setRange(0, static_cast<int>(durationUs / 1000));
@@ -115,11 +121,28 @@ void MainWindow::createWidgets()
     layout->addLayout(controlLayout);
 }
 
+void MainWindow::createMenu()
+{
+    auto* menuBar = this->menuBar();
+    auto* fileMenu = menuBar->addMenu(tr("&File"));
+    auto* openAction = fileMenu->addAction(tr("&Open"));
+    connect(openAction, &QAction::triggered, this, &MainWindow::onOpenFileActionTriggered);
+
+    auto* exitAction = fileMenu->addAction(tr("&Exit"));
+    connect(exitAction, &QAction::triggered, this, [this]() {
+        close();
+    });
+}
+
 void MainWindow::onVideoRendererInitialized()
 {
     if (!m_commandInputFile.isEmpty()) {
-        m_controller->openFile(m_commandInputFile);
+        int ret = m_controller->openFile(m_commandInputFile);
         m_commandInputFile = {};
+
+        if (!ret) {
+            QMessageBox::critical(this, tr("Error"), tr("Failed to open media file."));
+        }
     }
 }
 
@@ -141,6 +164,19 @@ void MainWindow::onPlaybackPositionChanged(int64_t positionUs)
 {
     if (!m_isPlaybackSliderPressed && !m_seekPending) {
         m_playbackSlider->setValue(static_cast<int>(positionUs / 1000));
+    }
+}
+
+void MainWindow::onOpenFileActionTriggered()
+{
+    QString fileName = QFileDialog::getOpenFileName(this, tr("Open File"), QString(), tr("Video Files (*.mp4 *.mkv *.avi)"));
+    if (fileName.isEmpty()) {
+        return;
+    }
+
+    bool ret = m_controller->openFile(fileName);
+    if (!ret) {
+        QMessageBox::critical(this, tr("Error"), tr("Failed to open media file."));
     }
 }
 

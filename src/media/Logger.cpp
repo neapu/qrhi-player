@@ -67,6 +67,7 @@ LoggerPtr createLogger(const std::string& loggerName, const std::string& logDir)
     auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(fileName, 1024 * 1024 * 5, 3);
 #ifdef DEBUG
     auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    consoleSink->set_level(spdlog::level::info);
     auto logger = std::make_shared<spdlog::logger>(loggerName, spdlog::sinks_init_list{fileSink, consoleSink});
     logger->set_level(spdlog::level::debug);
 #else

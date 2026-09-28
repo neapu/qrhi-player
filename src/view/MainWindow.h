@@ -18,12 +18,14 @@ public:
 
 private:
     void createWidgets();
+    void createMenu();
 
 private slots:
     void onVideoRendererInitialized();
     void onPlaybackSliderPressed();
     void onPlaybackSliderReleased();
     void onPlaybackPositionChanged(int64_t positionUs);
+    void onOpenFileActionTriggered();
 
 private:
     Controller* m_controller{nullptr};

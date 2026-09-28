@@ -12,7 +12,7 @@ class Controller : public QObject {
 public:
     explicit Controller(QObject* parent = nullptr);
 
-    void openFile(const QString& filePath);
+    bool openFile(const QString& filePath);
     void closeFile();
 
     fh::FramePtr nextVideoFrame();

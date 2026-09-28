@@ -54,7 +54,12 @@ bool Decoder::openCodec(const AVStream* stream)
         return false;
     }
 
-    if (int ret = avcodec_open2(m_codecCtx.get(), m_codecCtx->codec, nullptr); ret < 0) {
+    const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (!codec) {
+        LOG_ERROR(m_logger, "Failed to find decoder for codec id: {}", static_cast<int>(stream->codecpar->codec_id));
+        return false;
+    }
+    if (int ret = avcodec_open2(m_codecCtx.get(), codec, nullptr); ret < 0) {
         LOG_ERROR(m_logger, "Failed to open codec: {}", fh::err2str(ret));
         return false;
     }

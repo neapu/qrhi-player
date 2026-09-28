@@ -75,7 +75,7 @@ void Controller::reanchorClockLocked(int64_t newAnchorMediaUs)
     m_clock.anchorWallUs = steadyClockUs();
 }
 
-void Controller::openFile(const QString& filePath)
+bool Controller::openFile(const QString& filePath)
 {
     closeFile();
     const uint64_t mediaGeneration = m_mediaGeneration;
@@ -93,7 +93,7 @@ void Controller::openFile(const QString& filePath)
     m_mediaSource = media::IMediaSource::create(params);
     if (!m_mediaSource) {
         qCritical() << "Failed to open media source:" << filePath;
-        return;
+        return false;
     }
 
     {
@@ -130,11 +130,13 @@ void Controller::openFile(const QString& filePath)
     if (!m_hasVideo && !m_hasAudio) {
         qCritical() << "Audio-only media but audio device unavailable:" << filePath;
         closeFile();
-        return;
+        return false;
     }
 
     emit fileOpened(m_mediaSource->duration());
     m_mediaSource->start(m_hasAudio);
+
+    return true;
 }
 
 void Controller::closeFile()
