@@ -5,6 +5,7 @@
 #include <optional>
 #include <functional>
 #include "MediaFrame.h"
+#include "Statistics.h"
 
 namespace media {
 class IMediaSource {
@@ -82,6 +83,11 @@ public:
      * @note 完成结果通过 Params::onSeekCompleted 回调报告。
      */
     virtual void seek(int64_t timestamp) = 0;
+
+    /**
+     * @brief 获取媒体的统计信息。
+     */
+    virtual Statistics statistics() = 0;
 };
 using MediaSourcePtr = std::unique_ptr<IMediaSource>;
 } // namespace media

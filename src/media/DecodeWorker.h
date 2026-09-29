@@ -1,8 +1,10 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <thread>
 #include <functional>
+#include <map>
 #include <queue>
 #include <variant>
 #include "Decoder.h"
@@ -33,6 +35,17 @@ public:
     MediaFrame nextFrame();
 
     bool queueEmpty() const;
+
+    // 解码统计：只累计成功取出帧的耗时，不含输出队列满时的等待
+    int64_t decodedFrames() const { return m_decodedFrames.load(std::memory_order_relaxed); }
+    int64_t totalDecodeTimeUs() const { return m_totalDecodeTimeUs.load(std::memory_order_relaxed); }
+    // 后处理统计：frameProcessors（Sws/Swr等）的总耗时
+    int64_t totalProcessTimeUs() const { return m_totalProcessTimeUs.load(std::memory_order_relaxed); }
+    // 输出队列满导致的等待总耗时（被消费端反压的证据）
+    int64_t totalQueueWaitTimeUs() const { return m_totalQueueWaitTimeUs.load(std::memory_order_relaxed); }
+    // 解码延迟统计：按pts配对"包发送时刻 -> 对应帧取出时刻"的穿透气延迟
+    int64_t latencyFrames() const { return m_latencyFrames.load(std::memory_order_relaxed); }
+    int64_t totalDecodeLatencyUs() const { return m_totalDecodeLatencyUs.load(std::memory_order_relaxed); }
 private:
     explicit DecodeWorker(const Params& params, DecoderPtr&& decoder);
     bool initialize();
@@ -57,6 +70,18 @@ private:
 
     std::atomic_bool m_seekRequired{false};
     int m_serial{0};
+
+    std::atomic_int64_t m_decodedFrames{0};
+    std::atomic_int64_t m_totalDecodeTimeUs{0};
+    std::atomic_int64_t m_totalProcessTimeUs{0};
+    std::atomic_int64_t m_totalQueueWaitTimeUs{0};
+    std::atomic_int64_t m_latencyFrames{0};
+    std::atomic_int64_t m_totalDecodeLatencyUs{0};
+
+    // 仅解码线程访问（send/receive同线程），无需加锁；key为包pts，value为发送时刻
+    std::map<int64_t, std::chrono::steady_clock::time_point> m_pendingPacketPts;
+
+    void recordDecodeLatency(int64_t framePts, std::chrono::steady_clock::time_point recvTime);
 };
 using DecodeWorkerPtr = std::unique_ptr<DecodeWorker>;
 } // namespace media

@@ -12,6 +12,7 @@ void PacketQueue::push(MediaPacket&& packet)
     if (m_queue.size() >= m_maxSize) {
         if (m_dropOldest) {
             m_queue.pop_front();
+            ++m_droppedCount;
         } else {
             m_nonFullCV.wait(lock, [this] { return m_queue.size() < m_maxSize || m_interrupted || m_stopped; });
             if (m_interrupted) {
@@ -74,6 +75,11 @@ void PacketQueue::stop()
     m_stopped = true;
     m_nonFullCV.notify_all();
     m_nonEmptyCV.notify_all();
+}
+
+int64_t PacketQueue::droppedCount() const
+{
+    return m_droppedCount.load();
 }
 
 } // namespace media

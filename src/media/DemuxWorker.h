@@ -31,6 +31,8 @@ public:
 
     bool streamQueueEmpty(uint32_t streamIndex) const;
     bool endOfFile() const { return m_endOfFile; }
+
+    int64_t streamDroppedCount(uint32_t streamIndex) const;
 private:
     DemuxWorker(const Params& params, DemuxerPtr&& demuxer);
     bool initialize();

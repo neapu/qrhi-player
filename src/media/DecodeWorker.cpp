@@ -1,5 +1,7 @@
 #include "DecodeWorker.h"
 
+#include <chrono>
+
 namespace {
 int getPacketSerial(const fh::PacketPtr& packet)
 {
@@ -122,11 +124,10 @@ void DecodeWorker::workerThread()
                     std::unique_lock<std::mutex> lock(m_frameQueueMutex);
                     m_frameQueue.clear();
                     m_decoder->flush();
+                    m_pendingPacketPts.clear();
                     m_serial = packetSerial;
                 }
                 decodePacket(std::move(arg), eof);
-            } else {
-                LOG_DEBUG(m_logger, "Unknown packet variant received");
             }
         }, std::move(packetVariant));
     }
@@ -143,13 +144,38 @@ fh::FramePtr DecodeWorker::processFrame(fh::FramePtr&& frame)
     return std::move(frame);
 }
 
+void DecodeWorker::recordDecodeLatency(int64_t framePts, std::chrono::steady_clock::time_point recvTime)
+{
+    if (framePts == AV_NOPTS_VALUE || m_pendingPacketPts.empty()) {
+        return;
+    }
+    // 输出帧的pts之前的包不会再有输出（画面被跳过），直接清理，防止map无限增长
+    m_pendingPacketPts.erase(m_pendingPacketPts.begin(), m_pendingPacketPts.lower_bound(framePts));
+    auto it = m_pendingPacketPts.find(framePts);
+    if (it != m_pendingPacketPts.end()) {
+        m_totalDecodeLatencyUs.fetch_add(
+            std::chrono::duration_cast<std::chrono::microseconds>(recvTime - it->second).count(),
+            std::memory_order_relaxed);
+        m_latencyFrames.fetch_add(1, std::memory_order_relaxed);
+        m_pendingPacketPts.erase(it);
+    }
+}
+
 void DecodeWorker::decodePacket(fh::PacketPtr&& packet, bool eof)
 {
+    const auto sendTime = std::chrono::steady_clock::now();
+    if (packet && packet->pts != AV_NOPTS_VALUE) {
+        if (m_pendingPacketPts.size() >= 4096) {
+            m_pendingPacketPts.erase(m_pendingPacketPts.begin());
+        }
+        m_pendingPacketPts[packet->pts] = sendTime;
+    }
     bool ret = m_decoder->sendPacket(std::move(packet));
     if (!ret) {
         return;
     }
     for (;;) {
+        const auto decodeStart = std::chrono::steady_clock::now();
         auto frameResult = m_decoder->receiveFrame();
         if (!frameResult) {
             int err = frameResult.error();
@@ -159,13 +185,29 @@ void DecodeWorker::decodePacket(fh::PacketPtr&& packet, bool eof)
             LOG_ERROR(m_logger, "Failed to receive frame from decoder, error: {}", err);
             break;
         }
+        const auto recvTime = std::chrono::steady_clock::now();
+        m_totalDecodeTimeUs.fetch_add(
+            std::chrono::duration_cast<std::chrono::microseconds>(recvTime - decodeStart).count(),
+            std::memory_order_relaxed);
+        m_decodedFrames.fetch_add(1, std::memory_order_relaxed);
+        recordDecodeLatency(frameResult.value()->pts, recvTime);
+        const auto processStart = std::chrono::steady_clock::now();
         auto processedFrame = processFrame(std::move(frameResult.value()));
+        m_totalProcessTimeUs.fetch_add(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - processStart).count(),
+            std::memory_order_relaxed);
         if (processedFrame) {
             setFrameSerial(processedFrame, m_serial);
             std::unique_lock<std::mutex> lock(m_frameQueueMutex);
-            m_frameQueueNotFullCV.wait(lock, [this]() { 
-                return m_frameQueue.size() < 10 || m_exitFlag || m_seekRequired; 
+            const auto waitStart = std::chrono::steady_clock::now();
+            m_frameQueueNotFullCV.wait(lock, [this]() {
+                return m_frameQueue.size() < 10 || m_exitFlag || m_seekRequired;
             });
+            m_totalQueueWaitTimeUs.fetch_add(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - waitStart).count(),
+                std::memory_order_relaxed);
             if (m_exitFlag || m_seekRequired) {
                 break;
             }

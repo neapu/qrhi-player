@@ -75,11 +75,15 @@ void DemuxWorker::createPacketQueues()
     for (uint32_t i = 0; i < streamCount; ++i) {
         auto stream = m_demuxer->stream(i);
         auto queueSize = targetQueueSize(m_demuxer->formatContext(), stream, m_logger);
-        if (queueSize == 0) continue;
+        if (queueSize == 0) {
+            LOG_WARN(m_logger, "Failed to determine queue size for stream index {}", i);
+            queueSize = 10; // 字幕流等
+        }
         bool dropOldest = m_mainStreamIndex != i;
         // PacketQueue 含 mutex/condition_variable，不可拷贝也不可移动，
         // 必须用 try_emplace 就地构造
         m_packetQueues.try_emplace(i, queueSize, dropOldest);
+        LOG_INFO(m_logger, "Created packet queue for stream index {} with size {}", i, queueSize);
     }
 }
 
@@ -222,6 +226,15 @@ bool DemuxWorker::streamQueueEmpty(uint32_t streamIndex) const
     }
     LOG_WARN(m_logger, "Stream index {} not found in packet queues", streamIndex);
     return true;
+}
+
+int64_t DemuxWorker::streamDroppedCount(uint32_t streamIndex) const
+{
+    if (m_packetQueues.contains(streamIndex)) {
+        return m_packetQueues.at(streamIndex).droppedCount();
+    }
+    LOG_WARN(m_logger, "Stream index {} not found in packet queues", streamIndex);
+    return 0;
 }
 
 } // namespace media

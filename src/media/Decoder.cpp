@@ -23,6 +23,7 @@ bool Decoder::initialize()
     if (!createContext(m_stream)) {
         return false;
     }
+    m_codecCtx->thread_count = 0;
     if (!openCodec(m_stream)) {
         return false;
     }

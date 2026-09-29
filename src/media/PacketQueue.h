@@ -15,6 +15,7 @@ public:
     void interrupt();
     bool empty() const;
     void stop();
+    int64_t droppedCount() const;
 
 private:
     std::deque<MediaPacket> m_queue{};
@@ -25,6 +26,7 @@ private:
     bool m_dropOldest{false};
     bool m_interrupted{false};
     bool m_stopped{false};
+    std::atomic_int64_t m_droppedCount{0};
 };
 using PacketQueuePtr = std::unique_ptr<PacketQueue>;
 } // namespace media

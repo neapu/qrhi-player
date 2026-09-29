@@ -19,6 +19,8 @@ public:
     std::optional<VideoParams> videoParams() override;
     int64_t duration() override;
     void seek(int64_t timestamp) override;
+
+    Statistics statistics() override;
 private:
     explicit MediaSource(const IMediaSource::Params& params);
     bool initialize();

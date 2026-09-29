@@ -3,6 +3,7 @@
 #include <QStandardPaths>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <string>
 
 extern "C" {
 #include <libavutil/log.h>
@@ -103,6 +104,7 @@ void LogManager::initialize()
     m_ffmpegLogger->set_level(spdlog::level::info);
 #endif
     m_ffmpegLogger->flush_on(spdlog::level::warn);
+    m_ffmpegLogger->set_level(spdlog::level::info);
     m_ffmpegLogger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
     m_logger->flush_on(spdlog::level::warn);
     m_logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%s:%#] %v");
@@ -115,7 +117,13 @@ void LogManager::initialize()
         if (logger) {
             char buffer[1024];
             vsnprintf(buffer, sizeof(buffer), fmt, vl);
-            logger->log(avLogLevelToSpdlogLevel(level), buffer);
+            std::string message(buffer);
+            while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
+                message.pop_back();
+            }
+            if (!message.empty()) {
+                logger->log(avLogLevelToSpdlogLevel(level), message);
+            }
         }
     });
 }

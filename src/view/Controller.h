@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QString>
 #include <QMutex>
+#include <QTimer>
 #include <cstdint>
 #include "media/IMediaSource.h"
 #include "audio_renderer/AudioRenderer.h"
@@ -45,6 +46,7 @@ private:
     int64_t clockUsLocked() const;
     void reanchorClockLocked(int64_t newAnchorMediaUs);
     void handleSeekCompleted(bool succeeded, int serial, uint64_t mediaGeneration);
+    void printStatistics();
 private:
     double m_volume{1.0};
     media::MediaSourcePtr m_mediaSource{nullptr};
@@ -76,6 +78,18 @@ private:
 
     bool m_videoEnd{false};
     bool m_audioEnd{false};
+
+    int64_t m_renderedVideoFrames{0};
+    int64_t m_lastRenderedVideoFrames{0};
+    int64_t m_droppedVideoFrames{0};
+    int64_t m_lastDecodedVideoFrames{0};
+    int64_t m_lastDecodeTimeUs{0};
+    int64_t m_lastProcessTimeUs{0};
+    int64_t m_lastQueueWaitTimeUs{0};
+    int64_t m_lastLatencyFrames{0};
+    int64_t m_lastDecodeLatencyUs{0};
+
+    QTimer* m_statisticsTimer{nullptr};
 };
 
 } // namespace view

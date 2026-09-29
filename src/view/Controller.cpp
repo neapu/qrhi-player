@@ -42,6 +42,8 @@ namespace view {
 Controller::Controller(QObject* parent)
     : QObject(parent)
 {
+    m_statisticsTimer = new QTimer(this);
+    connect(m_statisticsTimer, &QTimer::timeout, this, &Controller::printStatistics);
 }
 
 void Controller::createAudioRenderer(media::IMediaSource::AudioParams audioParams)
@@ -82,7 +84,7 @@ bool Controller::openFile(const QString& filePath)
     media::IMediaSource::Params params{};
     params.source = filePath.toStdString();
     params.logDir = view::LogManager::instance().logDir().toStdString();
-    params.requiredPixelFormats = {AV_PIX_FMT_YUV420P};
+    params.requiredPixelFormats = {AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV420P10LE};
     params.requiredSampleFormats = {AV_SAMPLE_FMT_FLT};
     params.initialSerial = m_serial;
     params.onSeekCompleted = [this, mediaGeneration](bool succeeded, int serial) {
@@ -136,11 +138,22 @@ bool Controller::openFile(const QString& filePath)
     emit fileOpened(m_mediaSource->duration());
     m_mediaSource->start(m_hasAudio);
 
+    m_statisticsTimer->start(1000); // 每秒输出一次统计信息
     return true;
 }
 
 void Controller::closeFile()
 {
+    m_statisticsTimer->stop();
+    m_renderedVideoFrames = 0;
+    m_lastRenderedVideoFrames = 0;
+    m_droppedVideoFrames = 0;
+    m_lastDecodedVideoFrames = 0;
+    m_lastDecodeTimeUs = 0;
+    m_lastProcessTimeUs = 0;
+    m_lastQueueWaitTimeUs = 0;
+    m_lastLatencyFrames = 0;
+    m_lastDecodeLatencyUs = 0;
     ++m_mediaGeneration;
     m_audioRenderer.reset();
     m_audioTimeBase = AVRational{0, 1};
@@ -179,6 +192,7 @@ fh::FramePtr Controller::nextVideoFrame()
                 } else if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, media::EndFrame>) {
                     media::EndFrame endFrame = std::move(frame);
                     if (endFrame.serial < m_serial) {
+                        ++m_droppedVideoFrames;
                         return;
                     }
                     m_videoEnd = true;
@@ -186,7 +200,6 @@ fh::FramePtr Controller::nextVideoFrame()
                         closeFile();
                     }
                 } else if constexpr (std::is_same_v<std::decay_t<decltype(frame)>, media::EmptyFrame>) {
-                    qDebug() << "Empty frame received";
                     m_pendingVideoFrame = nullptr;
                 } else {
                     qCritical() << "Unknown frame type received";
@@ -201,6 +214,7 @@ fh::FramePtr Controller::nextVideoFrame()
         int serial = getFrameSerial(m_pendingVideoFrame);
         if (serial < m_serial) {
             m_pendingVideoFrame.reset();
+            ++m_droppedVideoFrames;
             continue;
         }
         m_serial = serial;
@@ -218,6 +232,7 @@ fh::FramePtr Controller::nextVideoFrame()
         int64_t ptsUs = framePtsUs(m_pendingVideoFrame, m_videoTimeBase);
         if (ptsUs == AV_NOPTS_VALUE) {
             // TODO: 针对无PTS视频帧，可能需要根据帧率或其他信息生成PTS，以后再处理
+            m_renderedVideoFrames++;
             return std::exchange(m_pendingVideoFrame, nullptr);
         }
         auto frameDurationUs = m_videoFrameDurationUs + 2000; // 加一点容错
@@ -233,6 +248,7 @@ fh::FramePtr Controller::nextVideoFrame()
         if (!m_hasAudio) {
             emit playbackPositionChanged(mediaUs);
         }
+        m_renderedVideoFrames++;
         return std::exchange(m_pendingVideoFrame, nullptr);
     }
     return nullptr;
@@ -365,6 +381,49 @@ void Controller::handleSeekCompleted(bool succeeded, int serial, uint64_t mediaG
         }
     }
     emit seekFinished(true);
+}
+
+void Controller::printStatistics()
+{
+    // 这一周期渲染的视频帧数
+    int64_t renderedThisPeriod = m_renderedVideoFrames - m_lastRenderedVideoFrames;
+    // 解码端的丢帧数、解码帧数与解码耗时
+    auto stats = m_mediaSource ? m_mediaSource->statistics() : media::Statistics{};
+    int64_t decodedThisPeriod = stats.video.decodedFrames - m_lastDecodedVideoFrames;
+    int64_t decodeTimeThisPeriodUs = stats.video.totalDecodeTimeUs - m_lastDecodeTimeUs;
+    int64_t processTimeThisPeriodUs = stats.video.totalProcessTimeUs - m_lastProcessTimeUs;
+    int64_t queueWaitTimeThisPeriodUs = stats.video.totalQueueWaitTimeUs - m_lastQueueWaitTimeUs;
+    int64_t latencyFramesThisPeriod = stats.video.latencyFrames - m_lastLatencyFrames;
+    int64_t latencyTimeThisPeriodUs = stats.video.totalDecodeLatencyUs - m_lastDecodeLatencyUs;
+    double decodeAvgMs = decodedThisPeriod > 0
+        ? static_cast<double>(decodeTimeThisPeriodUs) / decodedThisPeriod / 1000.0
+        : 0.0;
+    double processAvgMs = decodedThisPeriod > 0
+        ? static_cast<double>(processTimeThisPeriodUs) / decodedThisPeriod / 1000.0
+        : 0.0;
+    double queueWaitAvgMs = decodedThisPeriod > 0
+        ? static_cast<double>(queueWaitTimeThisPeriodUs) / decodedThisPeriod / 1000.0
+        : 0.0;
+    double latencyAvgMs = latencyFramesThisPeriod > 0
+        ? static_cast<double>(latencyTimeThisPeriodUs) / latencyFramesThisPeriod / 1000.0
+        : 0.0;
+    qDebug() << QString("[VideoRenderer:[Rendered:%1][Dropped:%2][ThisPeriod:%3]][Decoder:[Dropped:%4][Decoded:%5][DecodeAvg:%6ms][ProcessAvg:%7ms][QueueWaitAvg:%8ms][LatencyAvg:%9ms]]")
+                        .arg(m_renderedVideoFrames)
+                        .arg(m_droppedVideoFrames)
+                        .arg(renderedThisPeriod)
+                        .arg(stats.video.droppedPackets)
+                        .arg(stats.video.decodedFrames)
+                        .arg(decodeAvgMs, 0, 'f', 2)
+                        .arg(processAvgMs, 0, 'f', 2)
+                        .arg(queueWaitAvgMs, 0, 'f', 2)
+                        .arg(latencyAvgMs, 0, 'f', 2);
+    m_lastRenderedVideoFrames = m_renderedVideoFrames;
+    m_lastDecodedVideoFrames = stats.video.decodedFrames;
+    m_lastDecodeTimeUs = stats.video.totalDecodeTimeUs;
+    m_lastProcessTimeUs = stats.video.totalProcessTimeUs;
+    m_lastQueueWaitTimeUs = stats.video.totalQueueWaitTimeUs;
+    m_lastLatencyFrames = stats.video.latencyFrames;
+    m_lastDecodeLatencyUs = stats.video.totalDecodeLatencyUs;
 }
 
 void Controller::seek(int64_t positionUs)

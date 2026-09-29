@@ -195,6 +195,22 @@ void MediaSource::seek(int64_t timestamp)
     }
 }
 
+Statistics MediaSource::statistics()
+{
+    Statistics stats{};
+    if (m_demuxWorker && m_videoDecodeWorker) {
+        uint32_t videoStreamIndex = m_videoDecodeWorker->streamIndex();
+        stats.video.droppedPackets = m_demuxWorker->streamDroppedCount(videoStreamIndex);
+        stats.video.decodedFrames = m_videoDecodeWorker->decodedFrames();
+        stats.video.totalDecodeTimeUs = m_videoDecodeWorker->totalDecodeTimeUs();
+        stats.video.totalProcessTimeUs = m_videoDecodeWorker->totalProcessTimeUs();
+        stats.video.totalQueueWaitTimeUs = m_videoDecodeWorker->totalQueueWaitTimeUs();
+        stats.video.latencyFrames = m_videoDecodeWorker->latencyFrames();
+        stats.video.totalDecodeLatencyUs = m_videoDecodeWorker->totalDecodeLatencyUs();
+    }
+    return stats;
+}
+
 void MediaSource::initializeLogger()
 {
     if (m_logger) {
@@ -304,6 +320,7 @@ std::optional<FrameProcessorList> MediaSource::makeVideoFrameProcessors(const De
 
     if (containsPixelFormat(m_requiredPixelFormats, pixelFormat)) {
         m_targetPixelFormat = pixelFormat;
+        LOG_INFO(m_logger, "Using native video pixel format: {}", static_cast<int>(pixelFormat));
         return frameProcessors; // 像素格式再请求的格式列表中，不用转换
     }
 
@@ -332,6 +349,7 @@ std::optional<FrameProcessorList> MediaSource::makeVideoFrameProcessors(const De
         LOG_ERROR(m_logger, "Failed to create SwsProcessor");
         return std::nullopt;
     }
+    LOG_INFO(m_logger, "Using software video pixel format: {}", static_cast<int>(targetPixelFormat));
     frameProcessors.push_back(std::move(swsProcessor));
 
     return frameProcessors;
