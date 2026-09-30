@@ -40,14 +40,6 @@ signals:
     void seekFinished(bool succeeded);
 
 private:
-    void createAudioRenderer(media::IMediaSource::AudioParams audioParams);
-
-    // 读取当前媒体时间，需要先持有 m_clock.mutex
-    int64_t clockUsLocked() const;
-    void reanchorClockLocked(int64_t newAnchorMediaUs);
-    void handleSeekCompleted(bool succeeded, int serial, uint64_t mediaGeneration);
-    void printStatistics();
-private:
     double m_volume{1.0};
     media::MediaSourcePtr m_mediaSource{nullptr};
 
@@ -61,35 +53,6 @@ private:
         bool paused{false};
     };
     Clock m_clock{};
-
-    fh::FramePtr m_pendingAudioFrame{nullptr};
-    fh::FramePtr m_pendingVideoFrame{nullptr};
-
-    bool m_hasVideo{false};
-    std::atomic_bool m_hasAudio{false};
-
-    int64_t m_videoFrameDurationUs{0};
-    AVRational m_videoTimeBase{0, 1};
-    AVRational m_audioTimeBase{0, 1};
-
-    std::atomic_int m_serial{0};
-    int64_t m_pendingSeekPositionUs{0};
-    uint64_t m_mediaGeneration{0};
-
-    bool m_videoEnd{false};
-    bool m_audioEnd{false};
-
-    int64_t m_renderedVideoFrames{0};
-    int64_t m_lastRenderedVideoFrames{0};
-    int64_t m_droppedVideoFrames{0};
-    int64_t m_lastDecodedVideoFrames{0};
-    int64_t m_lastDecodeTimeUs{0};
-    int64_t m_lastProcessTimeUs{0};
-    int64_t m_lastQueueWaitTimeUs{0};
-    int64_t m_lastLatencyFrames{0};
-    int64_t m_lastDecodeLatencyUs{0};
-
-    QTimer* m_statisticsTimer{nullptr};
 };
 
 } // namespace view

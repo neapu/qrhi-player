@@ -79,10 +79,10 @@ public:
     virtual int64_t duration() = 0;
     /**
      * @brief 跳转到指定的时间戳，单位为微秒。
-     * @param timestamp 目标时间戳，单位为微秒。
+     * @param positionUs 目标时间戳，单位为微秒。
      * @note 完成结果通过 Params::onSeekCompleted 回调报告。
      */
-    virtual void seek(int64_t timestamp) = 0;
+    virtual void seek(int64_t positionUs) = 0;
 
     /**
      * @brief 获取媒体的统计信息。
