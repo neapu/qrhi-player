@@ -28,8 +28,8 @@ public:
     };
     State state() const;
 
-    double volume() const { return m_volume; }
-    void setVolume(double volume);
+    float volume() const { return m_volume; }
+    void setVolume(float volume);
 
     void seek(int64_t positionUs);
 
@@ -40,7 +40,7 @@ signals:
     void seekFinished(bool succeeded);
 
 private:
-    double m_volume{1.0};
+    float m_volume{1.0};
     media::MediaSourcePtr m_mediaSource{nullptr};
 
     std::unique_ptr<AudioRenderer> m_audioRenderer{nullptr};

@@ -30,8 +30,7 @@ public:
     // 音频时钟（微秒）：媒体时间轴上"正在被听到"的采样时刻
     int64_t playbackPosition() const;
 
-    // 音频时钟是否正在推进（设备在运行、已提交过数据、且未欠载）
-    bool isClockAdvancing() const;
+    bool playing() const;
 
     bool start();
     void stop();
