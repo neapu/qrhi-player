@@ -25,10 +25,17 @@ MediaSource::MediaSource(const Params& params)
     , m_onSeekCompleted(params.onSeekCompleted)
 {}
 
+MediaSource::~MediaSource()
+{}
+
 bool MediaSource::initialize()
 {
     // Initialization logic here
     return true;
+}
+
+void MediaSource::start(bool audioAvailable)
+{
 }
 
 MediaFrame MediaSource::nextVideoFrame()

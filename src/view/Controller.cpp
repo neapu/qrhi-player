@@ -8,8 +8,9 @@ Controller::Controller(QObject* parent)
 
 bool Controller::openFile(const QString& filePath)
 {
-    // Implement the logic to open the file here
-    return true; // Return true if the file was successfully opened, false otherwise
+    media::IMediaSource::Params params;
+    m_mediaSource = media::IMediaSource::create(params);
+    return true;
 }
 
 void Controller::closeFile()
