@@ -16,7 +16,11 @@ public:
         std::string instanceName{"default"};   // 多实例时区分日志
         std::vector<AVPixelFormat> requiredPixelFormats{};
         std::vector<AVSampleFormat> requiredSampleFormats{};
-        int initialSerial{0};
+        /**
+         * @brief 回调函数，在 seek 操作完成后被调用。
+         * @param success 是否成功完成 seek 操作。
+         * @param serial seek之后更新的初始序列号，只有大于该序列号的帧才应该被渲染。失败时无意义。
+         */
         std::function<void(bool, int)> onSeekCompleted;
     };
 
@@ -31,8 +35,9 @@ public:
      *        为 false 时：若文件有视频流，视频流成为主流且音频解码线程不启动
      *        （音频设备打开失败时降级为无声视频播放）；
      *        若文件无视频流则仍以音频流为主流。
+     * @return 初始序列号，只有大于该序列号的帧才应该被渲染。失败时返回 -1。
      */
-    virtual void start(bool audioAvailable) = 0;
+    virtual int start(bool audioAvailable) = 0;
 
     /**
      * @brief 获取下一个视频帧。消费操作。

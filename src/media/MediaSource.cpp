@@ -21,7 +21,6 @@ MediaSource::MediaSource(const Params& params)
     , m_instanceName(params.instanceName)
     , m_requiredPixelFormats(params.requiredPixelFormats)
     , m_requiredSampleFormats(params.requiredSampleFormats)
-    , m_initialSerial(params.initialSerial)
     , m_onSeekCompleted(params.onSeekCompleted)
 {}
 
@@ -34,8 +33,9 @@ bool MediaSource::initialize()
     return true;
 }
 
-void MediaSource::start(bool audioAvailable)
+int MediaSource::start(bool audioAvailable)
 {
+    return 0;
 }
 
 MediaFrame MediaSource::nextVideoFrame()

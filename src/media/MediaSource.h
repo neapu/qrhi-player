@@ -8,7 +8,7 @@ public:
 
     ~MediaSource() override;
 
-    void start(bool audioAvailable) override;
+    int start(bool audioAvailable) override;
 
     MediaFrame nextVideoFrame() override;
     MediaFrame nextAudioFrame() override;
@@ -31,7 +31,6 @@ private:
     std::string m_instanceName{};
     std::vector<AVPixelFormat> m_requiredPixelFormats{};
     std::vector<AVSampleFormat> m_requiredSampleFormats{};
-    int m_initialSerial{0};
     std::function<void(bool, int)> m_onSeekCompleted{};
 };
 
