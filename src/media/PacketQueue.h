@@ -9,10 +9,12 @@ class PacketQueue {
 public:
     explicit PacketQueue(size_t capacity);
 
-    bool push(MediaPacket&& packet);
+    // 非阻塞模式时，强制入队，不管容量是否已满，用于EndPacket等特殊包
+    bool push(MediaPacket&& packet, bool nonBlocking);
     MediaPacket pop();
     void clear();
     void interrupt();
+    void cancelInterrupt();
     void stop();
 
 private:
