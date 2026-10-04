@@ -31,11 +31,7 @@ DemuxWorker::DemuxWorker(const Params& params, DemuxerPtr&& demuxer)
 
 DemuxWorker::~DemuxWorker()
 {
-    try {
-        stop();
-    } catch (...) {
-        // Ignore exceptions during destruction
-    }
+    stop();
 }
 
 bool DemuxWorker::initialize()
@@ -66,10 +62,11 @@ void DemuxWorker::createPacketQueue(int streamIndex, size_t capacity)
     m_packetQueues[streamIndex] = std::make_unique<PacketQueue>(capacity);
 }
 
-void DemuxWorker::start()
+int DemuxWorker::start()
 {
     m_exitFlag = false;
     m_workerThread = std::thread(&DemuxWorker::workerThread, this);
+    return m_serial;
 }
 
 void DemuxWorker::stop()
@@ -88,18 +85,19 @@ void DemuxWorker::stop()
 
 void DemuxWorker::seek(int64_t positionUs)
 {
+    interruptAllPacketQueues();
     {
         std::lock_guard<std::mutex> lock(m_seekMutex);
         m_seekPositionUs = positionUs;
     }
     m_seekCV.notify_all();
-    interruptAllPacketQueues();
 }
 
 MediaPacket DemuxWorker::popPacket(int streamIndex)
 {
-    if (m_packetQueues.contains(streamIndex)) {
-        return m_packetQueues[streamIndex]->pop();
+    auto it = m_packetQueues.find(streamIndex);
+    if (it != m_packetQueues.end()) {
+        return it->second->pop();
     }
     return EmptyPacket{};
 }
@@ -122,6 +120,7 @@ void DemuxWorker::workerThread()
                 clearAllPacketQueues();
                 cancelInterruptAllPacketQueues();
                 pushFlashPacketToAllQueues();
+                retryCount = 0;
                 m_onSeekCompleted(true, m_serial);
             } else {
                 cancelInterruptAllPacketQueues();
@@ -144,20 +143,22 @@ void DemuxWorker::workerThread()
                 retryCount++;
                 std::this_thread::sleep_for(READ_ERROR_RETRY_DELAY);
             } else {
+                m_onError(DemuxWorker::Error::ReadFailed);
+                LOG_ERROR(m_logger, "Failed to read packet after {} retries, error {}", MAX_RETRY_COUNT, err);
                 // wait for seek or exit signal
                 std::unique_lock<std::mutex> lock(m_seekMutex);
                 m_seekCV.wait(lock, [this] { return m_seekPositionUs != AV_NOPTS_VALUE || m_exitFlag; });
                 retryCount = 0;
             }
-
             continue;
         }
         retryCount = 0; // Reset retry count after a successful read
         // 将读取到的包分发到对应的包队列中
         auto packet = std::move(*packetExp);
         writePacketSerial(packet, m_serial);
-        if (m_packetQueues.contains(packet->stream_index)) {
-            m_packetQueues[packet->stream_index]->push(std::move(packet), false);
+        auto it = m_packetQueues.find(packet->stream_index);
+        if (it != m_packetQueues.end()) {
+            it->second->push(std::move(packet), false);
         }
     }
 }

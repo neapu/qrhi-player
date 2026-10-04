@@ -7,6 +7,7 @@
 namespace media {
 class PacketQueue {
 public:
+    // 容量不允许为0
     explicit PacketQueue(size_t capacity);
 
     // 非阻塞模式时，强制入队，不管容量是否已满，用于EndPacket等特殊包

@@ -13,7 +13,7 @@ PacketQueue::PacketQueue(size_t capacity)
 bool PacketQueue::push(MediaPacket&& packet, bool nonBlocking)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    if (!nonBlocking) {
+    if (!nonBlocking && m_queue.size() >= m_capacity && !m_interrupted && !m_stopped) {
         m_notFullCv.wait(lock, [this] { return m_queue.size() < m_capacity || m_interrupted || m_stopped; });
     }
     if (m_stopped) {
@@ -29,7 +29,9 @@ bool PacketQueue::push(MediaPacket&& packet, bool nonBlocking)
 MediaPacket PacketQueue::pop()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    m_notEmptyCv.wait(lock, [this] { return !m_queue.empty() || m_interrupted || m_stopped; });
+    if (!m_interrupted && !m_stopped && m_queue.empty()) {
+        m_notEmptyCv.wait(lock, [this] { return !m_queue.empty() || m_interrupted || m_stopped; });
+    }
     if (m_interrupted || m_stopped) {
         return EmptyPacket{};
     }

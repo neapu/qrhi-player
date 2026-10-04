@@ -28,13 +28,14 @@ public:
 
     ~DemuxWorker();
 
-    // 创建指定流的包队列，缓存指定容量的媒体包。
+    // 创建指定流的包队列，缓存指定容量的媒体包。容量不允许为0。
     // 没有消费端的流不要创建队列，避免卡死解封装线程
     // 必须在 start 之前创建，start 之后不能再调用
     void createPacketQueue(int streamIndex, size_t capacity);
 
     // 调用约定：启动工作线程，对象生命周期只能启动一次，停止后不能再启动
-    void start();
+    // 返回初始序列号
+    int start();
     // 调用约定：不能在回调中调用 stop
     void stop();
 
