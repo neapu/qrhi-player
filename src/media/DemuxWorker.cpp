@@ -12,10 +12,22 @@ void writePacketSerial(fh::PacketPtr& packet, int serial)
 }
 
 namespace media {
-std::unique_ptr<DemuxWorker> DemuxWorker::create(const Params& params, DemuxerPtr&& demuxer)
+DemuxWorkerBuilder::DemuxWorkerBuilder(const DemuxWorker::Params& params, DemuxerPtr&& demuxer)
+    : m_params(params)
+    , m_demuxer(std::move(demuxer))
 {
-    auto worker = std::unique_ptr<DemuxWorker>(new DemuxWorker(params, std::move(demuxer)));
-    if (worker && worker->initialize()) {
+}
+
+DemuxWorkerBuilder& DemuxWorkerBuilder::withPacketQueue(int streamIndex, size_t capacity)
+{
+    m_packetQueueSpecs.emplace_back(streamIndex, capacity);
+    return *this;
+}
+
+std::unique_ptr<DemuxWorker> DemuxWorkerBuilder::build()
+{
+    auto worker = std::unique_ptr<DemuxWorker>(new DemuxWorker(m_params, std::move(m_demuxer)));
+    if (worker->initialize() && worker->configurePacketQueues(m_packetQueueSpecs)) {
         return worker;
     }
     return nullptr;
@@ -31,7 +43,7 @@ DemuxWorker::DemuxWorker(const Params& params, DemuxerPtr&& demuxer)
 
 DemuxWorker::~DemuxWorker()
 {
-    stop();
+    stopInternal();
 }
 
 bool DemuxWorker::initialize()
@@ -52,18 +64,25 @@ bool DemuxWorker::initialize()
     return true;
 }
 
-void DemuxWorker::createPacketQueue(int streamIndex, size_t capacity)
+bool DemuxWorker::configurePacketQueues(const std::vector<std::pair<int, size_t>>& packetQueueSpecs)
 {
     uint32_t streamCount = m_demuxer->streamCount();
-    if (streamIndex < 0 || streamIndex >= static_cast<int>(streamCount)) {
-        LOG_ERROR(m_logger, "Failed to create packet queue: invalid stream index {}", streamIndex);
-        return;
+    for (const auto& [streamIndex, capacity] : packetQueueSpecs) {
+        if (streamIndex < 0 || streamIndex >= static_cast<int>(streamCount)) {
+            LOG_ERROR(m_logger, "Failed to create packet queue: invalid stream index {}", streamIndex);
+            return false;
+        }
+        m_packetQueues[streamIndex] = std::make_unique<PacketQueue>(capacity);
     }
-    m_packetQueues[streamIndex] = std::make_unique<PacketQueue>(capacity);
+    return true;
 }
 
 int DemuxWorker::start()
 {
+    if (m_started.exchange(true)) {
+        LOG_ERROR(m_logger, "DemuxWorker::start called more than once, the extra call is ignored");
+        return m_serial;
+    }
     m_exitFlag = false;
     m_workerThread = std::thread(&DemuxWorker::workerThread, this);
     return m_serial;
@@ -71,16 +90,33 @@ int DemuxWorker::start()
 
 void DemuxWorker::stop()
 {
+    if (m_stopped.exchange(true)) {
+        LOG_ERROR(m_logger, "DemuxWorker::stop called more than once, the extra call is ignored");
+        return;
+    }
+    FUNC_TRACE(m_logger, spdlog::level::info);
+    stopInternal();
+}
+
+void DemuxWorker::stopInternal()
+{
     {
         std::lock_guard<std::mutex> lock(m_seekMutex);
         m_exitFlag = true;
         m_seekCV.notify_all();
     }
-    
+
     stopAllPacketQueues();
-    if (m_workerThread.joinable()) {
-        m_workerThread.join();
+    if (!m_workerThread.joinable()) {
+        return;
     }
+    // 回调运行在解封装线程，此处 join 自身会抛 std::system_error 并终止进程
+    if (m_workerThread.get_id() == std::this_thread::get_id()) {
+        LOG_ERROR(m_logger, "DemuxWorker::stop must not be called from the demux thread, the worker thread is detached");
+        m_workerThread.detach();
+        return;
+    }
+    m_workerThread.join();
 }
 
 void DemuxWorker::seek(int64_t positionUs)
