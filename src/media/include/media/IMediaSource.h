@@ -8,6 +8,20 @@
 #include "Statistics.h"
 
 namespace media {
+enum class Error {
+    /**
+     * @brief 读取媒体数据失败。
+     * @note 恢复方法：触发一次成功的 seek 操作。
+     */
+    ReadFailed,
+    // 根据后续实现添加错误类型
+
+    /**
+     * @brief 未知错误。
+     * @note 所有未知错误都视为不可恢复，需要重建 MediaSource 实例。
+     */
+    Unknown
+};
 class IMediaSource {
 public:
     struct Params {
@@ -19,36 +33,49 @@ public:
         /**
          * @brief 回调函数，在 seek 操作完成后被调用。
          * @param success 是否成功完成 seek 操作。
-         * @param serial seek之后更新的初始序列号，只有大于该序列号的帧才应该被渲染。失败时无意义。
+         * @note 该回调发生在 media 内部线程，不允许在回调中析构 MediaSource 实例。
          */
-        std::function<void(bool, int)> onSeekCompleted;
+        std::function<void(bool)> onSeekCompleted;
+        /**
+         * @brief 回调函数，在媒体源发生错误时被调用。
+         * @param error 错误类型。
+         * @note 该回调发生在 media 内部线程，不允许在回调中析构 MediaSource 实例。
+         */
+        std::function<void(Error)> onError;
     };
 
     static std::unique_ptr<IMediaSource> create(const Params& params);
 
     virtual ~IMediaSource() = default;
 
+    struct StartOptions {
+        bool audioAvailable{false}; // 是否存在音频消费端（音频渲染器是否创建成功）
+        bool videoAvailable{false}; // 是否存在视频消费端（视频渲染器是否创建成功）
+    };
     /**
-     * @brief 启动内部工作线程（解封装、解码）。create 之后必须调用一次，
-     *        之后 nextVideoFrame/nextAudioFrame 才会产出数据。
+     * @brief 启动内部工作线程（解封装、解码）。
      * @param audioAvailable 是否存在音频消费端（音频渲染器是否创建成功）。
      *        为 false 时：若文件有视频流，视频流成为主流且音频解码线程不启动
      *        （音频设备打开失败时降级为无声视频播放）；
      *        若文件无视频流则仍以音频流为主流。
-     * @return 初始序列号，只有大于该序列号的帧才应该被渲染。失败时返回 -1。
+     * @note 工作线程将在析构时停止，析构回调用 join，不能在回调中析构 MediaSource 实例。
+     *       create 之后必须调用一次 start，nextVideoFrame/nextAudioFrame 才会产出数据。
+     *       MediaSource 实例生命周期中只能 start 一次。
      */
-    virtual int start(bool audioAvailable) = 0;
+    virtual void start(const StartOptions& options) = 0;
 
     /**
      * @brief 获取下一个视频帧。消费操作。
      * @return 下一个视频帧，如果度到流结尾，返回 EndFrame
      * @note 非阻塞，如果帧队列为空，返回 EmptyFrame。
+     *       线程安全。
      */
     virtual MediaFrame nextVideoFrame() = 0;
     /**
      * @brief 获取下一个音频帧。消费操作。
      * @return 下一个音频帧，如果度到流结尾，返回 EndFrame
      * @note 非阻塞，如果帧队列为空，返回 EmptyFrame。
+     *       线程安全。
      */
     virtual MediaFrame nextAudioFrame() = 0;
 
